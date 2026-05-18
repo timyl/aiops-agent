@@ -1,0 +1,555 @@
+import json
+import logging
+import os
+import re
+import time
+from datetime import datetime, timezone, timedelta
+from langgraph.graph import StateGraph, END
+from agent.state import AgentState
+
+log = logging.getLogger(__name__)
+
+# Suppress raw HTTP client noise — we print our own curl-style lines instead
+logging.getLogger("elastic_transport.transport").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+ALLOWED_PLMNS = [
+    {"mcc": "510", "mnc": "011"},
+    {"mcc": "208", "mnc": "93"},
+    {"mcc": "001", "mnc": "01"},
+    {"mcc": "001", "mnc": "001"},
+    {"mcc": "505", "mnc": "02"},
+]
+_ALLOWED_PLMNS_STR  = os.getenv("ALLOWED_PLMNS", ",".join(f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS))
+_NRF_RETRY_OK       = int(os.getenv("NRF_RETRY_OK_THRESHOLD",   "3"))
+_NRF_RETRY_FAIL     = int(os.getenv("NRF_RETRY_FAIL_THRESHOLD", "10"))
+
+ES_URL   = os.getenv("ES_URL",         "http://172.16.100.91:30200")
+PROM_URL = os.getenv("PROMETHEUS_URL", "http://172.16.100.91:30504")
+PCF_URL  = os.getenv("PCF_CONFIG_URL", "http://172.16.100.231:8000")
+PCF_PATH = "/PCF/nf-common-component/v1/nrf-client-nfmanagement/nfProfileList"
+
+# Regex to extract dropped field names from NRF WARN logs
+_DROPPED_RE = re.compile(r"dropped/ignored\s+\[([^\]]+)\]", re.IGNORECASE)
+
+# Fields that are clear spelling mistakes — safe to auto-fix
+_FIXABLE_TYPOS = {"nfSetIdLists", "nfServiceLists", "plmnLists", "ipv4Address"}
+
+# Known vendor/operator extensions — NOT safe to auto-fix, require human review
+_VENDOR_FIELDS = {"scpInfo", "servingScope", "lcHSupportInd", "olcHSupportInd"}
+
+
+# ── Node: fetch_logs ──────────────────────────────────────────────────────────
+
+def fetch_logs(state: AgentState) -> AgentState:
+    from tools.es_tool import fetch_logs as es_fetch
+
+    ns    = state["namespace"]
+    index = f"k8s-{datetime.now(timezone.utc).strftime('%Y.%m.%d')}"
+    since = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%H:%M:%SZ")
+
+    log.info(f"[GRAPH] → fetch_logs")
+    log.info(f"[TOOL/ES]  > GET {ES_URL}/{index}/_search")
+    log.info(f"[TOOL/ES]  > filter: namespace={ns}  level IN [ERROR,WARN]  @timestamp >= now-5m  (since {since})")
+
+    t0   = time.time()
+    logs = es_fetch(ns, minutes=5, max_lines=60)
+    dur  = time.time() - t0
+
+    error_lines = [l for l in logs if "ERROR" in l]
+    warn_lines  = [l for l in logs if "WARN"  in l]
+    log.info(f"[TOOL/ES]  < 200 OK  duration={dur:.3f}s  returned={len(logs)} lines  (ERROR={len(error_lines)}, WARN={len(warn_lines)})")
+
+    if error_lines:
+        log.info(f"[TOOL/ES]  sample error lines:")
+        for line in error_lines[:3]:
+            log.info(f"[TOOL/ES]    {line[:130]}")
+
+    return {**state, "logs": logs}
+
+
+# ── Node: fetch_metrics ───────────────────────────────────────────────────────
+
+def fetch_metrics(state: AgentState) -> AgentState:
+    from tools.prometheus_tool import get_nrf_registration_rate, get_nrf_response_errors, get_pcf_local_status
+    from tools.pcf_tool import get_pcf_profile
+
+    ns = state["namespace"]
+    log.info(f"[GRAPH] → fetch_metrics")
+
+    # ── Prometheus ──
+    prom_query = (f'increase(occnp_nrfclient_nw_conn_out_request_total'
+                  f'{{MessageType="AutonomousNfRegistration",namespace="{ns}"}}[2m])')
+    log.info(f"[TOOL/PM]  > GET {PROM_URL}/api/v1/query")
+    log.info(f"[TOOL/PM]  > query: {prom_query}")
+
+    t0     = time.time()
+    rate   = get_nrf_registration_rate(ns)
+    errors = get_nrf_response_errors(ns)
+    status = get_pcf_local_status(ns)
+    dur    = time.time() - t0
+
+    log.info(f"[TOOL/PM]  < 200 OK  duration={dur:.3f}s")
+    log.info(f"[TOOL/PM]    nrf_retry_rate={rate['value']:.1f}/2min  "
+             f"(threshold=3, {'⚠ failure loop active' if rate['value'] > 3 else '✓ normal'})")
+    log.info(f"[TOOL/PM]    pcf_local_status={status}")
+    if errors:
+        for e in errors:
+            log.info(f"[TOOL/PM]    error_response: code={e['response_code']}  "
+                     f"type={e['message_type']}  count={e['count']:.0f}")
+
+    # ── PCF Config API ──
+    log.info(f"[TOOL/PCF] > GET {PCF_URL}{PCF_PATH}")
+
+    t0      = time.time()
+    profile = get_pcf_profile()
+    dur     = time.time() - t0
+    plmn    = profile.get("plmnList", [])
+
+    log.info(f"[TOOL/PCF] < 200 OK  duration={dur:.3f}s")
+    log.info(f"[TOOL/PCF]   nfStatus={profile.get('nfStatus','?')}  plmnList={plmn}")
+    allowed_str = [f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS]
+    for p in plmn:
+        ok = p in ALLOWED_PLMNS
+        log.info(f"[TOOL/PCF]   plmn {p['mcc']}/{p['mnc']} → "
+                 f"{'✓ in NRF allowed list' if ok else '✗ NOT in NRF allowed list ' + str(allowed_str)}")
+
+    return {
+        **state,
+        "nrf_rate":         rate["value"],
+        "nrf_errors":       errors,
+        "pcf_plmn":         plmn,
+        "pcf_local_status": status,
+    }
+
+
+# ── Node: fetch_nrf_logs ──────────────────────────────────────────────────────
+
+def fetch_nrf_logs(state: AgentState) -> AgentState:
+    from tools.es_tool import fetch_nrf_logs as es_nrf_fetch
+
+    index = f"k8s-{datetime.now(timezone.utc).strftime('%Y.%m.%d')}"
+    since = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%H:%M:%SZ")
+
+    log.info(f"[GRAPH] → fetch_nrf_logs")
+    log.info(f"[TOOL/ES]  > GET {ES_URL}/{index}/_search")
+    log.info(f"[TOOL/ES]  > filter: namespace=ocnrf1  level IN [ERROR,WARN]  @timestamp >= now-5m  (since {since})")
+
+    t0       = time.time()
+    nrf_logs = es_nrf_fetch(minutes=5, max_lines=60)
+    dur      = time.time() - t0
+
+    warn_lines = [l for l in nrf_logs if "WARN" in l]
+    log.info(f"[TOOL/ES]  < 200 OK  duration={dur:.3f}s  returned={len(nrf_logs)} lines  (WARN={len(warn_lines)})")
+
+    # Extract dropped field names from WARN logs, classify by severity
+    fixable  = []
+    vendor   = []
+    unknown  = []
+    for line in nrf_logs:
+        m = _DROPPED_RE.search(line)
+        if m:
+            fields = [f.strip() for f in m.group(1).split(",")]
+            for f in fields:
+                if f in _FIXABLE_TYPOS:
+                    fixable.append(f)
+                    log.info(f"[TOOL/ES]  ⚠ PCF field typo detected (auto-fixable): '{f}'")
+                elif f in _VENDOR_FIELDS:
+                    vendor.append(f)
+                    log.info(f"[TOOL/ES]  ℹ vendor field dropped (human review): '{f}'")
+                else:
+                    unknown.append(f)
+                    log.info(f"[TOOL/ES]  ⚠ unknown dropped field (human review): '{f}'")
+            log.info(f"[TOOL/ES]    {line[:200]}")
+
+    all_dropped = list(set(fixable + vendor + unknown))
+
+    if not all_dropped:
+        log.info(f"[TOOL/ES]  ✓ No silent-drop WARN messages found in NRF logs")
+    elif vendor and not fixable and not unknown:
+        log.info(f"[TOOL/ES]  ℹ Only vendor-specific drops found — no auto-fix needed")
+
+    # Suppress field_errors when there is an active PLMN failure loop (nrf_rate > 3).
+    # A high retry rate means the current fault is hard-rejection, not silent drop.
+    # The NRF 15-min window may still contain residual WARN logs from a previously
+    # fixed field issue — don't let those stale logs override the PLMN diagnosis.
+    nrf_rate = state.get("nrf_rate", 0)
+    if fixable and nrf_rate > 3:
+        log.info(f"[TOOL/ES]  ⚠ field typo(s) {fixable} found in NRF logs BUT nrf_rate={nrf_rate:.1f} > 3 "
+                 f"— suppressing field_errors (residual logs from prior fix, active failure loop takes priority)")
+        fixable = []
+
+    # field_errors: only fixable typos trigger RAG + auto-fix
+    return {**state, "nrf_logs": nrf_logs,
+            "field_errors": list(set(fixable)),
+            "all_dropped_fields": all_dropped}
+
+
+# ── Node: rag_lookup ──────────────────────────────────────────────────────────
+
+def rag_lookup(state: AgentState) -> AgentState:
+    from tools.rag_tool import get_field_info, query_knowledge
+
+    field_errors = state.get("field_errors", [])
+    if not field_errors:
+        log.info(f"[GRAPH] → rag_lookup  (skipped — no field errors detected)")
+        return {**state, "rag_context": []}
+
+    log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for {field_errors})")
+
+    chunks = []
+    for field in field_errors:
+        log.info(f"[LLM]   > RAG query: field name '{field}'")
+        results = get_field_info(field)
+        log.info(f"[LLM]   < RAG returned {len(results)} chunk(s)")
+        for r in results:
+            log.info(f"[LLM]     · {r[:100]}...")
+        chunks.extend(results)
+
+    # Deduplicate
+    seen = set()
+    unique_chunks = []
+    for c in chunks:
+        if c not in seen:
+            seen.add(c)
+            unique_chunks.append(c)
+
+    return {**state, "rag_context": unique_chunks}
+
+
+# ── Node: analyze ─────────────────────────────────────────────────────────────
+
+def analyze(state: AgentState) -> AgentState:
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if api_key and api_key != "your-api-key-here":
+        return _analyze_with_llm(state)
+    log.info("[GRAPH] → analyze  (mode=rules, no API key)")
+    return _analyze_with_rules(state)
+
+
+def _analyze_with_rules(state: AgentState) -> AgentState:
+    plmn         = state["pcf_plmn"]
+    rate         = state["nrf_rate"]
+    field_errors = state.get("field_errors", [])
+
+    # Silent drop fault: NRF rate normal but field errors present
+    if field_errors and rate < 3:
+        wrong = field_errors[0]
+        # Simple rule: nfSetIdLists → nfSetIdList
+        correct = wrong.rstrip("s") if wrong.endswith("s") else wrong
+        return {**state,
+                "root_cause": f"NRF silently dropped invalid field '{wrong}' — not a 3GPP TS 29.510 field",
+                "fix_action": f"fix_field:{wrong}:{correct}", "confidence": "high"}
+
+    if rate < 3:
+        return {**state, "root_cause": "NRF retry rate is low — alert may have self-resolved",
+                "fix_action": "no_action", "confidence": "high"}
+
+    bad = [p for p in plmn if p not in ALLOWED_PLMNS]
+    if bad:
+        bad_str = ", ".join(f"{p['mcc']}/{p['mnc']}" for p in bad)
+        return {**state,
+                "root_cause": f"PCF plmnList contains PLMN(s) not in NRF allowed list: {bad_str}",
+                "fix_action": "update_plmn:510:011", "confidence": "high"}
+
+    errs = [l for l in state["logs"] if "ERROR" in l]
+    return {**state,
+            "root_cause": f"High retry rate ({rate:.0f}/2min) but plmnList looks valid. "
+                          f"{len(errs)} ERROR lines require manual inspection.",
+            "fix_action": "notify_only", "confidence": "low"}
+
+
+def _analyze_with_llm(state: AgentState) -> AgentState:
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from agent.prompts import SYSTEM_PROMPT, ANALYSIS_PROMPT
+
+    log.info(f"[GRAPH] → analyze  (mode=llm)")
+
+    # Keep only the 5 most recent distinct ERROR/WARN lines, truncated to 120 chars each
+    _ew = [l for l in state["logs"] if "ERROR" in l or "WARN" in l]
+    _seen: set[str] = set()
+    _deduped: list[str] = []
+    for _l in reversed(_ew):
+        _key = _l[20:80]        # use middle portion as dedup key (skip timestamp prefix)
+        if _key not in _seen:
+            _seen.add(_key)
+            _deduped.append(_l[:120])
+        if len(_deduped) == 5:
+            break
+    error_logs   = "\n".join(reversed(_deduped)) or "(no error/warn logs found)"
+    nrf_logs_str = "\n".join(l[:120] for l in state.get("nrf_logs", [])[:5]) or "(no NRF WARN logs)"
+    rag_ctx      = state.get("rag_context", [])
+    rag_str      = "\n---\n".join(rag_ctx) if rag_ctx else "(no RAG context — PLMN fault scenario)"
+
+    llm = ChatOpenAI(
+        model="qwen-max",
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        base_url=os.getenv("DASHSCOPE_API_HOST"),
+        temperature=0,
+    )
+    user_msg = ANALYSIS_PROMPT.format(
+        alert_name=state["alert_name"],
+        namespace=state["namespace"],
+        nrf_rate=state["nrf_rate"],
+        pcf_local_status=state["pcf_local_status"],
+        pcf_plmn=state["pcf_plmn"],
+        allowed_plmns=_ALLOWED_PLMNS_STR,
+        retry_ok=_NRF_RETRY_OK,
+        retry_fail=_NRF_RETRY_FAIL,
+        field_errors=state.get("field_errors") or "none",
+        error_logs=error_logs or "(no error/warn logs found)",
+        nrf_logs=nrf_logs_str,
+        rag_context=rag_str,
+    )
+
+    host = os.getenv("DASHSCOPE_API_HOST", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    div  = "─" * 60
+    log.info(f"[LLM]   > POST {host}/chat/completions  model=qwen-max  temperature=0")
+    log.info(f"[LLM]   ┌── SYSTEM PROMPT {div[:44]}")
+    for line in SYSTEM_PROMPT.splitlines():
+        log.info(f"[LLM]   │  {line}")
+    log.info(f"[LLM]   ├── USER MESSAGE (ANALYSIS_PROMPT filled) {div[:16]}")
+    for line in user_msg.splitlines():
+        log.info(f"[LLM]   │  {line}")
+    log.info(f"[LLM]   └{div}")
+
+    t0       = time.time()
+    response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)])
+    dur      = time.time() - t0
+
+    content = response.content.strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+
+    try:
+        result = json.loads(content)
+        log.info(f"[LLM]   < 200 OK  duration={dur:.1f}s")
+        log.info(f"[LLM]   ── Observations {'─'*36}")
+        for i, obs in enumerate(result.get("observations", []), 1):
+            log.info(f"[LLM]   [{i}] {obs}")
+        log.info(f"[LLM]   ── Diagnosis {'─'*39}")
+        log.info(f"[LLM]   root_cause → {result['root_cause']}")
+        log.info(f"[LLM]   fix_action → {result['fix_action']}  confidence={result['confidence']}")
+        log.info(f"[LLM]   {'─'*52}")
+        return {**state, "root_cause": result["root_cause"],
+                "fix_action": result["fix_action"], "confidence": result["confidence"]}
+    except Exception as e:
+        log.warning(f"[LLM]   parse failed ({e}), raw={content[:200]} — falling back to rules")
+        return _analyze_with_rules(state)
+
+
+# ── Node: decide ──────────────────────────────────────────────────────────────
+
+def decide(state: AgentState) -> str:
+    action     = state.get("fix_action", "notify_only")
+    confidence = state.get("confidence", "low")
+
+    if action == "no_action":
+        log.info(f"[GRAPH] → decide  route=end  (alert self-resolved, no active fault)")
+        return END
+    if action.startswith("update_plmn") and confidence in ("high", "medium"):
+        log.info(f"[GRAPH] → decide  route=auto_fix  (plmn mismatch, confidence={confidence})")
+        return "auto_fix"
+    if action.startswith("fix_field") and confidence in ("high", "medium"):
+        log.info(f"[GRAPH] → decide  route=fix_field  (silent drop, confidence={confidence})")
+        return "fix_field"
+    log.info(f"[GRAPH] → decide  route=notify  (action={action}, confidence={confidence})")
+    return "notify"
+
+
+# ── Node: auto_fix ────────────────────────────────────────────────────────────
+
+def auto_fix(state: AgentState) -> AgentState:
+    from tools.pcf_tool import update_pcf_plmn
+
+    parts    = state["fix_action"].split(":")
+    mcc, mnc = parts[1], parts[2]
+
+    log.info(f"[GRAPH] → auto_fix")
+    log.info(f"[FIX]   > PUT {PCF_URL}{PCF_PATH}")
+    log.info(f"[FIX]   > body: plmnList=[{{'mcc':'{mcc}','mnc':'{mnc}'}}]  (was {state['pcf_plmn']})")
+    try:
+        t0     = time.time()
+        result = update_pcf_plmn(mcc, mnc)
+        dur    = time.time() - t0
+        log.info(f"[TOOL/PCF] < 200 OK  duration={dur:.3f}s  new plmnList={result.get('plmnList')}")
+        return {**state, "fix_applied": True, "error": None}
+    except Exception as e:
+        log.error(f"[TOOL/PCF] < ERROR  {e}")
+        return {**state, "fix_applied": False, "error": str(e)}
+
+
+# ── Node: fix_field ───────────────────────────────────────────────────────────
+
+def fix_field(state: AgentState) -> AgentState:
+    from tools.pcf_tool import fix_profile_field
+
+    parts      = state["fix_action"].split(":")
+    wrong_name = parts[1]
+    right_name = parts[2]
+
+    log.info(f"[GRAPH] → fix_field")
+    log.info(f"[FIX]   > GET {PCF_URL}{PCF_PATH}  (fetch full profile)")
+    log.info(f"[FIX]   > renaming field: '{wrong_name}' → '{right_name}'")
+    log.info(f"[FIX]   > PUT {PCF_URL}{PCF_PATH}  (write corrected profile)")
+    try:
+        t0     = time.time()
+        result = fix_profile_field(wrong_name, right_name)
+        dur    = time.time() - t0
+        log.info(f"[TOOL/PCF] < 200 OK  duration={dur:.3f}s")
+        log.info(f"[TOOL/PCF]   profile keys after fix: {list(result.keys())}")
+        return {**state, "fix_applied": True, "error": None}
+    except Exception as e:
+        log.error(f"[TOOL/PCF] < ERROR  {e}")
+        return {**state, "fix_applied": False, "error": str(e)}
+
+
+# ── Node: verify_fix ──────────────────────────────────────────────────────────
+
+def verify_fix(state: AgentState) -> AgentState:
+    from tools.prometheus_tool import get_nrf_registration_rate
+    from tools.pcf_tool import get_pcf_profile
+    from tools.es_tool import fetch_nrf_logs as es_nrf_fetch
+
+    if not state.get("fix_applied"):
+        return {**state, "fix_verified": False}
+
+    action = state.get("fix_action", "")
+
+    # For silent-drop fixes: verify PCF profile has the correct key (not the wrong one)
+    if action.startswith("fix_field"):
+        wrong_name = action.split(":")[1]
+        right_name = action.split(":")[2]
+        log.info(f"[GRAPH] → verify_fix  (field fix — verifying PCF profile keys, sleeping 5s...)")
+        time.sleep(5)
+
+        profile = get_pcf_profile()
+        keys    = list(profile.keys())
+        log.info(f"[TOOL/PCF] < profile keys: {keys}")
+
+        has_correct = right_name in profile
+        has_wrong   = wrong_name in profile
+
+        if has_correct and not has_wrong:
+            log.info(f"[VERIFY] profile has '{right_name}', '{wrong_name}' absent  ✓ Field fix confirmed")
+            return {**state, "fix_verified": True}
+        else:
+            log.info(f"[VERIFY] '{right_name}' present={has_correct}  '{wrong_name}' present={has_wrong}  ✗ Fix incomplete")
+            return {**state, "fix_verified": False}
+
+    # For PLMN fixes: poll Prometheus rate
+    prev_rate = state["nrf_rate"]
+    healthy   = False
+
+    for attempt in range(1, 4):
+        wait = 30 * attempt
+        log.info(f"[GRAPH] → verify_fix  attempt {attempt}/3  (sleeping {wait}s...)")
+        time.sleep(wait)
+
+        log.info(f"[TOOL/PM]  > GET {PROM_URL}/api/v1/query  (re-check retry rate)")
+        rate     = get_nrf_registration_rate(state["namespace"])
+        new_plmn = get_pcf_profile().get("plmnList", [])
+        log.info(f"[TOOL/PM]  < nrf_retry_rate={rate['value']:.1f}/2min  (was {prev_rate:.1f} before fix)")
+        log.info(f"[TOOL/PCF] < plmnList={new_plmn}")
+
+        if rate["value"] < 3:
+            log.info(f"[VERIFY] rate={rate['value']:.1f} < 3  ✓ Registration restored")
+            healthy = True
+            break
+        elif rate["value"] < prev_rate * 0.5:
+            log.info(f"[VERIFY] rate={rate['value']:.1f} (dropped >50% from {prev_rate:.1f})  ✓ Fix taking effect — registration recovering")
+            healthy = True
+            break
+        else:
+            log.info(f"[VERIFY] rate={rate['value']:.1f} >= 3  ✗ Still recovering{' — will retry' if attempt < 3 else ' — giving up'}")
+
+    return {**state, "fix_verified": healthy}
+
+
+# ── Node: notify ──────────────────────────────────────────────────────────────
+
+def notify(state: AgentState) -> AgentState:
+    import requests as _requests
+
+    sep = "═" * 52
+    fix_verified = state.get("fix_verified")
+    fix_applied  = state.get("fix_applied")
+
+    # Determine escalation reason for clearer log/message
+    if fix_applied and fix_verified is False:
+        reason = "auto-fix applied but verification failed"
+    elif state.get("confidence") == "low":
+        reason = "low confidence — cannot determine safe fix"
+    else:
+        reason = "no applicable auto-fix for this fault"
+
+    log.warning(f"[GRAPH] → notify  (human escalation — {reason})")
+    log.warning(f"[ESCALATION] {sep}")
+    log.warning(f"[ESCALATION] Alert     : {state['alert_name']} | ns={state['namespace']}")
+    log.warning(f"[ESCALATION] Root cause: {state.get('root_cause', 'unknown')}")
+    log.warning(f"[ESCALATION] Fix tried : {state.get('fix_action')}  verified={fix_verified}")
+    log.warning(f"[ESCALATION] Confidence: {state.get('confidence')}")
+    log.warning(f"[ESCALATION] Reason    : {reason}")
+    log.warning(f"[ESCALATION] → Human operator intervention required")
+    log.warning(f"[ESCALATION] {sep}")
+
+    webhook_url = os.getenv("NOTIFY_WEBHOOK_URL", "")
+    if webhook_url:
+        dropped = state.get("all_dropped_fields", [])
+        dropped_str = (", ".join(f"`{f}`" for f in dropped)) if dropped else "none detected"
+        text = (
+            f":rotating_light: *AIOps — Human Escalation Required*\n"
+            f">*Alert:* `{state['alert_name']}` | ns=`{state['namespace']}`\n"
+            f">*Root cause:* {state.get('root_cause', 'unknown')}\n"
+            f">*Dropped fields:* {dropped_str}\n"
+            f">*Fix tried:* `{state.get('fix_action')}` | verified=`{fix_verified}`\n"
+            f">*Confidence:* `{state.get('confidence')}`\n"
+            f">*Reason:* {reason}"
+        )
+        try:
+            resp = _requests.post(webhook_url, json={"text": text}, timeout=5)
+            log.info(f"[NOTIFY] Slack notified  status={resp.status_code}")
+        except Exception as e:
+            log.error(f"[NOTIFY] Slack notification failed: {e}")
+
+    return state
+
+
+# ── Build graph ───────────────────────────────────────────────────────────────
+
+def build_graph():
+    g = StateGraph(AgentState)
+    g.add_node("fetch_logs",    fetch_logs)
+    g.add_node("fetch_metrics", fetch_metrics)
+    g.add_node("fetch_nrf_logs", fetch_nrf_logs)
+    g.add_node("rag_lookup",    rag_lookup)
+    g.add_node("analyze",       analyze)
+    g.add_node("auto_fix",      auto_fix)
+    g.add_node("fix_field",     fix_field)
+    g.add_node("verify_fix",    verify_fix)
+    g.add_node("notify",        notify)
+
+    g.set_entry_point("fetch_logs")
+    g.add_edge("fetch_logs",     "fetch_metrics")
+    g.add_edge("fetch_metrics",  "fetch_nrf_logs")
+    g.add_edge("fetch_nrf_logs", "rag_lookup")
+    g.add_edge("rag_lookup",     "analyze")
+    g.add_conditional_edges("analyze", decide, {
+        "auto_fix":  "auto_fix",
+        "fix_field": "fix_field",
+        "notify":    "notify",
+    })
+    g.add_edge("auto_fix",   "verify_fix")
+    g.add_edge("fix_field",  "verify_fix")
+    g.add_conditional_edges("verify_fix",
+        lambda s: "notify" if not s.get("fix_verified") else END,
+        {"notify": "notify", END: END})
+    g.add_edge("notify",     END)
+    return g.compile()
+
+
+graph = build_graph()

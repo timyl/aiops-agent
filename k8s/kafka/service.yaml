@@ -1,0 +1,34 @@
+---
+# Headless service: gives StatefulSet pod a stable DNS name
+# kafka-0.kafka-headless.aiops.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: aiops
+spec:
+  clusterIP: None
+  selector:
+    app: kafka
+  ports:
+    - name: client
+      port: 9092
+    - name: controller
+      port: 9093
+---
+# NodePort service: exposes broker to bastion worker.py (outside K8s)
+# TODO: remove once worker.py is deployed inside K8s (use kafka-headless instead)
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: aiops
+spec:
+  selector:
+    app: kafka
+  type: NodePort
+  ports:
+    - name: client
+      port: 9092
+      targetPort: 9092
+      nodePort: 30092

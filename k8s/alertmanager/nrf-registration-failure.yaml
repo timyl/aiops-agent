@@ -1,0 +1,31 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"monitoring.coreos.com/v1","kind":"PrometheusRule","metadata":{"annotations":{},"name":"nrf-registration-failure","namespace":"monitoring"},"spec":{"groups":[{"name":"nrf_registration.rules","rules":[{"alert":"NfRegistrationFailure","annotations":{"description":"PCF ({{ $labels.pod }}) is sending excessive NRF registration requests ({{ $value | printf \"%.0f\" }} in 2min), indicating registration failure. NrfURI={{ $labels.NrfURI }}, NfInstanceID={{ $labels.NfInstanceID }}\n","summary":"PCF NRF registration failure detected"},"expr":"increase(occnp_nrfclient_nw_conn_out_request_total{\n  namespace=\"occnp2\",\n  MessageType=\"AutonomousNfRegistration\"\n}[2m]) \u003e 3\n","for":"30s","labels":{"NfType":"PCF","namespace":"occnp2","severity":"warning"}}]}]}}
+  creationTimestamp: "2026-04-28T07:46:22Z"
+  generation: 1
+  name: nrf-registration-failure
+  namespace: monitoring
+  resourceVersion: "26664555"
+  uid: d3d6c1e3-1269-4099-83ab-bc09b36f27df
+spec:
+  groups:
+  - name: nrf_registration.rules
+    rules:
+    - alert: NfRegistrationFailure
+      annotations:
+        description: |
+          PCF ({{ $labels.pod }}) is sending excessive NRF registration requests ({{ $value | printf "%.0f" }} in 2min), indicating registration failure. NrfURI={{ $labels.NrfURI }}, NfInstanceID={{ $labels.NfInstanceID }}
+        summary: PCF NRF registration failure detected
+      expr: |
+        increase(occnp_nrfclient_nw_conn_out_request_total{
+          namespace="occnp2",
+          MessageType="AutonomousNfRegistration"
+        }[2m]) > 3
+      for: 30s
+      labels:
+        NfType: PCF
+        namespace: occnp2
+        severity: warning

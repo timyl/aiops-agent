@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: aiops-webhook
+  namespace: occnp2          # must match alert's namespace label
+  labels:
+    alertmanager: main       # picked up by Alertmanager CR's alertmanagerConfigSelector
+spec:
+  receivers:
+    - name: aiops-webhook
+      webhookConfigs:
+        - url: "http://aiops-webhook.aiops.svc.cluster1.local:8000/alarm"
+          sendResolved: false
+  route:
+    receiver: aiops-webhook
+    # Prometheus Operator auto-prepends namespace=occnp2 matcher,
+    # which matches the NfRegistrationFailure alert label.
+    matchers:
+      - name: alertname
+        matchType: "="
+        value: NfRegistrationFailure
+    groupWait: 10s
+    repeatInterval: 2m

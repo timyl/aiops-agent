@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-config
+  namespace: aiops
+data:
+  # External services (outside K8s)
+  ES_URL:           "http://172.16.100.91:30200"
+  ES_USER:          "elastic"
+  PROMETHEUS_URL:   "http://172.16.100.91:30504"
+  PCF_CONFIG_URL:   "http://172.16.100.231:8000"
+
+  # Kafka + Redis — internal K8s service names (same namespace)
+  KAFKA_BOOTSTRAP:  "kafka:9092"
+  KAFKA_TOPIC:      "aiops-alerts"
+  KAFKA_GROUP:      "aiops-worker"
+  REDIS_HOST:       "redis"
+  REDIS_PORT:       "6379"
+
+  # Tongyi Qianwen (OpenAI-compatible)
+  DASHSCOPE_API_HOST: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+  # Bailian RAG knowledge base
+  BAILIAN_WORKSPACE_ID: "ws-vva2ccbe0za0bs7r"
+  BAILIAN_INDEX_ID:     "jar5imuame"
+
+  # Audit log path (mounted emptyDir)
+  INCIDENTS_FILE: "/data/incidents.jsonl"

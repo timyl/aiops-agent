@@ -1,0 +1,62 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-webhook
+  namespace: aiops
+  labels:
+    app: aiops-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-webhook
+  template:
+    metadata:
+      labels:
+        app: aiops-webhook
+    spec:
+      containers:
+        - name: webhook
+          image: dockergeng/aiops-agent:latest
+          imagePullPolicy: Always
+          command:
+            - uvicorn
+            - webhook.server:app
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: aiops-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-webhook
+  namespace: aiops
+spec:
+  selector:
+    app: aiops-webhook
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000

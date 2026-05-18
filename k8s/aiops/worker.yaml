@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-worker
+  namespace: aiops
+  labels:
+    app: aiops-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-worker
+  template:
+    metadata:
+      labels:
+        app: aiops-worker
+    spec:
+      containers:
+        - name: worker
+          image: dockergeng/aiops-agent:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -m
+            - agent.worker
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: aiops-secret
+          volumeMounts:
+            - name: incident-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+      volumes:
+        - name: incident-data
+          emptyDir: {}
