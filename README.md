@@ -277,8 +277,8 @@ redis           1/1     1            1           9h
 Alert fires → agent fetches evidence → LLM diagnoses → PLMN corrected via PCF REST API → verified.
 
 ```
-[ALERT]  NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
-[AGENT]  Starting LangGraph agent for occnp2...
+[ALERT]  NfRegistrationFailure | ns=5gpcf | NfType=PCF | status=firing
+[AGENT]  Starting LangGraph agent for 5gpcf...
 
 [TOOL/PM] nrf_retry_rate=20.0/2min  (healthy < 3, active failure loop > 10)
 [TOOL/PCF] plmnList=[{'mcc':'510','mnc':'089'}]  local_status=PCF_LOCAL_REGISTERED
@@ -297,7 +297,7 @@ Alert fires → agent fetches evidence → LLM diagnoses → PLMN corrected via 
 [LLM]  │  - confidence : "high" | "medium" | "low"
 [LLM]  └───────────────────────────────────────────────────────────────
 [LLM]  ┌── USER MESSAGE (ANALYSIS_PROMPT) ─────────────────────────────
-[LLM]  │  Alert: NfRegistrationFailure | namespace: occnp2
+[LLM]  │  Alert: NfRegistrationFailure | namespace: 5gpcf
 [LLM]  │
 [LLM]  │  === EVIDENCE ===
 [LLM]  │  NRF retry rate (2min): 20.0  [healthy < 3, active failure loop > 10]
@@ -349,8 +349,8 @@ Alert fires → agent fetches evidence → LLM diagnoses → PLMN corrected via 
 NRF silently drops a misspelled field; PCF thinks registration succeeded (200 OK) but NF profile is incomplete. Agent detects via NRF WARN logs + RAG lookup.
 
 ```text
-[ALERT]  NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
-[AGENT]  Starting LangGraph agent for occnp2...
+[ALERT]  NfRegistrationFailure | ns=5gpcf | NfType=PCF | status=firing
+[AGENT]  Starting LangGraph agent for 5gpcf...
 
 [TOOL/PM]  nrf_retry_rate=0.0/2min  (no hard rejection loop)
 [TOOL/PCF] plmnList=[{'mcc':'510','mnc':'011'}]  ✓ PLMN is correct
@@ -399,7 +399,7 @@ Field name is not in the auto-fix whitelist; agent escalates to on-call via Slac
 [GRAPH] → decide  route=notify  (notify_only)
 [GRAPH] → notify
 [SLACK] POST https://hooks.slack.com/...
-[SLACK] > "NfRegistrationFailure in occnp2 — unknown dropped field: 'capacities'.
+[SLACK] > "NfRegistrationFailure in 5gpcf — unknown dropped field: 'capacities'.
            Manual intervention required."
 [SLACK] < 200 OK
 ```
@@ -413,8 +413,8 @@ Field name is not in the auto-fix whitelist; agent escalates to on-call via Slac
 Every agent run appends a structured record — full decision trail, queryable, maps to DynamoDB/OCI NoSQL in production.
 
 ```jsonl
-{"ts":"2026-05-18T03:22:47","alert_name":"NfRegistrationFailure","namespace":"occnp2","root_cause":"PCF plmnList contains invalid PLMN (510/088), not in NRF allowed list.","fix_action":"update_plmn:510:011","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
-{"ts":"2026-05-18T04:09:22","alert_name":"NfRegistrationFailure","namespace":"occnp2","root_cause":"Field 'nfSetIdLists' silently dropped by NRF — typo of 'nfSetIdList'.","fix_action":"fix_field:nfSetIdLists:nfSetIdList","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
-{"ts":"2026-05-18T11:08:06","alert_name":"NfRegistrationFailure","namespace":"occnp2","root_cause":"PCF plmnList contains invalid PLMN (510/089), not accepted by NRF.","fix_action":"update_plmn:510:011","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
-{"ts":"2026-05-18T13:23:13","alert_name":"NfRegistrationFailure","namespace":"occnp2","root_cause":"Field 'nfSetIdLists' incorrectly named, silently dropped by NRF.","fix_action":"fix_field:nfSetIdLists:nfSetIdList","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
+{"ts":"2026-05-18T03:22:47","alert_name":"NfRegistrationFailure","namespace":"5gpcf","root_cause":"PCF plmnList contains invalid PLMN (510/088), not in NRF allowed list.","fix_action":"update_plmn:510:011","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
+{"ts":"2026-05-18T04:09:22","alert_name":"NfRegistrationFailure","namespace":"5gpcf","root_cause":"Field 'nfSetIdLists' silently dropped by NRF — typo of 'nfSetIdList'.","fix_action":"fix_field:nfSetIdLists:nfSetIdList","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
+{"ts":"2026-05-18T11:08:06","alert_name":"NfRegistrationFailure","namespace":"5gpcf","root_cause":"PCF plmnList contains invalid PLMN (510/089), not accepted by NRF.","fix_action":"update_plmn:510:011","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
+{"ts":"2026-05-18T13:23:13","alert_name":"NfRegistrationFailure","namespace":"5gpcf","root_cause":"Field 'nfSetIdLists' incorrectly named, silently dropped by NRF.","fix_action":"fix_field:nfSetIdLists:nfSetIdList","confidence":"high","fix_applied":true,"fix_verified":true,"error":null}
 ```
