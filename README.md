@@ -402,16 +402,9 @@ Field name is not in the auto-fix whitelist; agent escalates to on-call via Slac
 [SLACK] > "NfRegistrationFailure in occnp2 — unknown dropped field: 'capacities'.
            Manual intervention required."
 [SLACK] < 200 OK
-
-**slack channel**
-aiops-agent  [2:59 PM]
-:rotating_light: AIOps — Human Escalation RequiredAlert: NfRegistrationFailure | ns=5gc_udm
-Root cause: The NRF is silently dropping a VendorSpecific attribute, which is causing a partial registration issue.
-Dropped fields: capacitiee
-Fix tried: notify_only | verified=False
-Confidence: medium
-Reason: no applicable auto-fix for this fault
 ```
+<img width="865" height="227" alt="image" src="https://github.com/user-attachments/assets/7df04bef-8273-48ec-bb92-96a0cf8c0e4e" />
+
 
 ---
 
