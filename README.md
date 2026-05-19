@@ -243,12 +243,16 @@ Different resource profiles: webhook is lightweight (Kafka producer only), worke
 ## Deployment — `aiops` Namespace
 
 ```bash
-$ kubectl get pods -n aiops -o wide
-NAME                            READY   STATUS    RESTARTS   AGE   IP               NODE
-aiops-webhook-869978964-klp7l   1/1     Running   0          97m   10.233.101.0     worker1
-aiops-worker-7cd48b7c78-mb2v9   1/1     Running   0          57m   10.233.123.111   worker3
-kafka-0                         1/1     Running   0          8h    10.233.101.4     worker1
-redis-845d787d54-fdgtm          1/1     Running   0          9h    10.233.101.19    worker1
+dscl1@bastion:~$ kubectl get pods -n aiops 
+NAME                            READY   STATUS    RESTARTS   AGE
+aiops-webhook-869978964-klp7l   1/1     Running   0          9h
+aiops-worker-7cd48b7c78-c72n6   1/1     Running   0          6s
+aiops-worker-7cd48b7c78-mb2v9   1/1     Running   0          9h
+aiops-worker-7cd48b7c78-mbbwk   1/1     Running   0          6s
+aiops-worker-7cd48b7c78-rhvl9   1/1     Running   0          6s
+aiops-worker-7cd48b7c78-z6prj   1/1     Running   0          6s
+kafka-0                         1/1     Running   0          16h
+redis-845d787d54-fdgtm          1/1     Running   0          17h
 
 $ kubectl get svc -n aiops
 NAME             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)           AGE
