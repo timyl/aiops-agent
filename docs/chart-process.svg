@@ -1,0 +1,83 @@
+<svg width="900" height="510" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI',Arial,sans-serif">
+  <rect width="900" height="510" fill="#f8f9fa" rx="12" stroke="#dee2e6" stroke-width="1"/>
+
+  <!-- Panel headers -->
+  <rect x="20" y="12" width="415" height="46" fill="#f8d7da" rx="8"/>
+  <text x="228" y="41" text-anchor="middle" font-size="15" font-weight="bold" fill="#842029">Traditional NOC Operations</text>
+
+  <rect x="465" y="12" width="415" height="46" fill="#d1e7dd" rx="8"/>
+  <text x="672" y="41" text-anchor="middle" font-size="15" font-weight="bold" fill="#0f5132">AIOps Agent</text>
+
+  <!-- Divider -->
+  <line x1="450" y1="5" x2="450" y2="505" stroke="#ced4da" stroke-width="1.5" stroke-dasharray="5,4"/>
+
+  <!-- ===== TRADITIONAL NOC ===== -->
+
+  <rect x="25" y="76" width="410" height="62" fill="#ffffff" stroke="#ffc107" stroke-width="2" rx="8"/>
+  <text x="230" y="101" text-anchor="middle" font-size="13" font-weight="bold" fill="#664d03">1  Alert Fires — On-Call Engineer Paged</text>
+  <text x="230" y="122" text-anchor="middle" font-size="11" fill="#6c757d">Phone / PagerDuty; engineer must be available and context-switch</text>
+
+  <line x1="230" y1="138" x2="230" y2="154" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="230,158 224,149 236,149" fill="#adb5bd"/>
+  <text x="248" y="150" font-size="11" fill="#dc3545" font-style="italic">2 – 5 min</text>
+
+  <rect x="25" y="158" width="410" height="62" fill="#ffffff" stroke="#ffc107" stroke-width="2" rx="8"/>
+  <text x="230" y="183" text-anchor="middle" font-size="13" font-weight="bold" fill="#664d03">2  Manual Log &amp; Metrics Search</text>
+  <text x="230" y="204" text-anchor="middle" font-size="11" fill="#6c757d">Kibana, Grafana, SSH — sequential queries, easy to miss signals</text>
+
+  <line x1="230" y1="220" x2="230" y2="236" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="230,240 224,231 236,231" fill="#adb5bd"/>
+  <text x="248" y="232" font-size="11" fill="#dc3545" font-style="italic">8 – 15 min</text>
+
+  <rect x="25" y="240" width="410" height="62" fill="#ffffff" stroke="#ffc107" stroke-width="2" rx="8"/>
+  <text x="230" y="265" text-anchor="middle" font-size="13" font-weight="bold" fill="#664d03">3  Root Cause Analysis &amp; Config Fix</text>
+  <text x="230" y="286" text-anchor="middle" font-size="11" fill="#6c757d">Manual cross-referencing; apply change via CLI or management UI</text>
+
+  <line x1="230" y1="302" x2="230" y2="318" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="230,322 224,313 236,313" fill="#adb5bd"/>
+  <text x="248" y="314" font-size="11" fill="#dc3545" font-style="italic">5 – 10 min</text>
+
+  <rect x="25" y="322" width="410" height="62" fill="#ffffff" stroke="#ffc107" stroke-width="2" rx="8"/>
+  <text x="230" y="347" text-anchor="middle" font-size="13" font-weight="bold" fill="#664d03">4  Manual Verification</text>
+  <text x="230" y="368" text-anchor="middle" font-size="11" fill="#6c757d">Watch dashboards by hand; no structured audit trail</text>
+
+  <rect x="25" y="406" width="410" height="44" fill="#f8d7da" stroke="#dc3545" stroke-width="2" rx="8"/>
+  <text x="230" y="434" text-anchor="middle" font-size="14" font-weight="bold" fill="#842029">Total MTTR: 18 – 35 minutes</text>
+
+  <!-- ===== AIOPS AGENT ===== -->
+
+  <rect x="465" y="76" width="410" height="62" fill="#ffffff" stroke="#198754" stroke-width="2" rx="8"/>
+  <text x="670" y="101" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f5132">1  Alert Fires → Kafka Queue</text>
+  <text x="670" y="122" text-anchor="middle" font-size="11" fill="#6c757d">AlertManager → webhook returns 200 OK instantly → async Kafka</text>
+
+  <line x1="670" y1="138" x2="670" y2="154" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="670,158 664,149 676,149" fill="#adb5bd"/>
+  <text x="688" y="150" font-size="11" fill="#198754" font-style="italic">&lt; 1 sec</text>
+
+  <rect x="465" y="158" width="410" height="62" fill="#ffffff" stroke="#198754" stroke-width="2" rx="8"/>
+  <text x="670" y="183" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f5132">2  Parallel Evidence Collection</text>
+  <text x="670" y="204" text-anchor="middle" font-size="11" fill="#6c757d">ES logs + Prometheus metrics + PCF config + RAG — simultaneous</text>
+
+  <line x1="670" y1="220" x2="670" y2="236" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="670,240 664,231 676,231" fill="#adb5bd"/>
+  <text x="688" y="232" font-size="11" fill="#198754" font-style="italic">&lt; 5 sec</text>
+
+  <rect x="465" y="240" width="410" height="62" fill="#ffffff" stroke="#198754" stroke-width="2" rx="8"/>
+  <text x="670" y="265" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f5132">3  LLM Diagnosis (GPT-4o + RAG)</text>
+  <text x="670" y="286" text-anchor="middle" font-size="11" fill="#6c757d">Structured JSON: root_cause + fix_action + confidence</text>
+
+  <line x1="670" y1="302" x2="670" y2="318" stroke="#adb5bd" stroke-width="2"/>
+  <polygon points="670,322 664,313 676,313" fill="#adb5bd"/>
+  <text x="688" y="314" font-size="11" fill="#198754" font-style="italic">&lt; 30 sec</text>
+
+  <rect x="465" y="322" width="410" height="62" fill="#ffffff" stroke="#198754" stroke-width="2" rx="8"/>
+  <text x="670" y="347" text-anchor="middle" font-size="13" font-weight="bold" fill="#0f5132">4  Auto-fix + Verification + Audit Log</text>
+  <text x="670" y="368" text-anchor="middle" font-size="11" fill="#6c757d">PCF REST API fix → metric re-check → incidents.jsonl</text>
+
+  <rect x="465" y="406" width="410" height="44" fill="#d1e7dd" stroke="#198754" stroke-width="2" rx="8"/>
+  <text x="670" y="434" text-anchor="middle" font-size="14" font-weight="bold" fill="#0f5132">Total MTTR: 2 – 12 minutes</text>
+
+  <!-- Center improvement badge -->
+  <rect x="358" y="454" width="184" height="30" fill="#0f5132" rx="15"/>
+  <text x="450" y="474" text-anchor="middle" font-size="13" font-weight="bold" fill="#ffffff">66% – 89% faster</text>
+</svg>

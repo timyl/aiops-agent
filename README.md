@@ -20,19 +20,13 @@ This agent was built to augment NOC operations for a 5G core network deployment.
 
 ## Operations Efficiency
 
-Representative metrics from lab evaluation against the PCF alert ruleset (20 alert types, 3-day test window):
+### Workflow Comparison
 
-```
-Metric                          Manual NOC    AIOps Agent    Improvement
-──────────────────────────────────────────────────────────────────────
-Avg. MTTR — config faults         18 min         2 min         -89%
-Avg. MTTR — connectivity faults   35 min        12 min         -66%
-Alert-to-diagnosis time           12 min        <30 sec        -97%
-False positive escalations         ~40%           <8%          -80%
-Alerts handled without human        0%           ~60%            —
-Concurrent incident handling         1          up to 3          3×
-Audit trail coverage               <30%          100%            —
-```
+![Process Comparison](docs/chart-process.svg)
+
+### Performance Benchmark
+
+![Benchmark Chart](docs/chart-benchmark.svg)
 
 **Alert triage breakdown (20-rule PCF ruleset):**
 
