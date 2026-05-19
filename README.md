@@ -2,7 +2,7 @@
 
 > An autonomous AIOps agent that monitors 5G core network NF registration failures, localizes root causes, applies configuration fixes, and verifies recovery — end-to-end in minutes.
 
-**Stack:** LangGraph · OpenAI GPT-4o / OCI Generative AI · OCI OpenSearch RAG · Kafka · Redis · Kubernetes · Prometheus · Elasticsearch
+**Stack:** LangGraph · OpenAI GPT / OCI Generative AI / qwen-max · OCI OpenSearch RAG / Alibaba Bailian RAG · Kafka · Redis · Kubernetes · Prometheus · Elasticsearch
 
 ---
 
@@ -55,7 +55,7 @@ AlertManager ──► Kafka (aiops-alerts topic)
                                       ▼
                                   rag_lookup  ──► Vector Knowledge Base
                                       ▼
-                                   analyze   ──► LLM (GPT-4o / OCI Llama)
+                                   analyze   ──► LLM (GPT / OCI Llama)
                                       ▼
                                    decide()  [deterministic routing]
                           ┌──────────┴──────────┐──────────┐
@@ -110,7 +110,7 @@ The agent covers the full PCF alert ruleset. Actions fall into three tiers:
 | Component | Choice | Why |
 |---|---|---|
 | Agent framework | LangGraph | Explicit node graph + conditional edges; LLM controls diagnosis only, not routing |
-| LLM | OpenAI GPT-4o / OCI Generative AI (Llama 3) | OpenAI-compatible API; pluggable — swap endpoint via env var |
+| LLM | OpenAI GPT / OCI Generative AI (Llama 3) | OpenAI-compatible API; pluggable — swap endpoint via env var |
 | RAG | OCI OpenSearch vector index / managed KB | Provides 3GPP field name context for silent-drop detection; swappable backend |
 | Message queue | Kafka KRaft | Decouples AlertManager from agent; survives burst alerts; enables multi-consumer patterns |
 | Dedup lock | Redis `SET NX EX 300` | Distributed across potential multi-pod deployments; prevents duplicate runs on same alert |
@@ -217,7 +217,7 @@ curl -X POST http://<alertmanager-host>/api/v2/alerts \
 | Kubernetes (Kubespray) | OKE | EKS |
 | Elasticsearch | OCI OpenSearch | Amazon OpenSearch |
 | RAG knowledge base | OCI Generative AI + OpenSearch vector | Bedrock Knowledge Bases |
-| LLM (GPT-4o / Llama) | OCI Generative AI Service | Amazon Bedrock |
+| LLM (GPT / Llama) | OCI Generative AI Service | Amazon Bedrock |
 | incidents.jsonl | OCI NoSQL Database | DynamoDB |
 | FastAPI webhook | OCI API Gateway + Functions | API Gateway + Lambda |
 | Slack notify | OCI Notifications | SNS |
@@ -281,7 +281,7 @@ Alert fires → agent fetches evidence → LLM diagnoses → PLMN corrected via 
 [TOOL/ES] PCF WARN — Error Response from NRF: 501 (PLMN not allowed)
 [GRAPH]  → analyze  (mode=llm)
 
-[LLM]  > POST /chat/completions  model=gpt-4o  temperature=0
+[LLM]  > POST /chat/completions  model=gpt  temperature=0
 [LLM]  ┌── SYSTEM PROMPT ──────────────────────────────────────────────
 [LLM]  │  You are a 5G core network SRE agent specializing in NF
 [LLM]  │  registration diagnostics.
