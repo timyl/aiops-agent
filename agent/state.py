@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     # Collected context — NRF side (fault scenario 2)
     nrf_logs: list[str]          # WARN logs from ocnrf1 namespace
     field_errors: list[str]      # fixable typo fields (in _FIXABLE_TYPOS) → triggers RAG + auto-fix
+    unknown_fields: list[str]    # dropped fields not in fixable_typos/vendor_fields → notify_only
     all_dropped_fields: list[str] # ALL dropped fields detected (fixable + vendor + unknown)
 
     # Analysis result

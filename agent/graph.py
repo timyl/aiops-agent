@@ -204,8 +204,10 @@ def fetch_nrf_logs(state: AgentState) -> AgentState:
         fixable = []
 
     # field_errors: only fixable typos trigger RAG + auto-fix
+    # unknown_fields: dropped but not in fixable_typos — LLM must see these to call notify_only
     return {**state, "nrf_logs": nrf_logs,
             "field_errors": list(set(fixable)),
+            "unknown_fields": list(set(unknown)),
             "all_dropped_fields": all_dropped}
 
 
@@ -214,9 +216,12 @@ def fetch_nrf_logs(state: AgentState) -> AgentState:
 def rag_lookup(state: AgentState) -> AgentState:
     from tools.rag_tool import get_field_info, query_knowledge
 
-    field_errors = state.get("field_errors", [])
+    field_errors   = state.get("field_errors", [])
+    unknown_fields = state.get("unknown_fields", [])
     if not field_errors:
-        log.info(f"[GRAPH] → rag_lookup  (skipped — no field errors detected)")
+        reason = (f"unknown fields {unknown_fields} — no RAG needed, LLM will notify_only"
+                  if unknown_fields else "no dropped fields detected")
+        log.info(f"[GRAPH] → rag_lookup  (skipped — {reason})")
         return {**state, "rag_context": []}
 
     log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for {field_errors})")
@@ -314,6 +319,12 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         temperature=0,
     ).bind_tools(TOOLS)
 
+    # Build field error context: fixable typos (RAG context available) + unknown drops (notify_only)
+    _fixable  = state.get("field_errors", [])
+    _unknown  = state.get("unknown_fields", [])
+    _all_field_issues = _fixable + [f"{f} (unknown — cannot auto-fix)" for f in _unknown]
+    field_errors_str  = _all_field_issues if _all_field_issues else "none"
+
     user_msg = ANALYSIS_PROMPT.format(
         alert_name=state["alert_name"],
         namespace=state["namespace"],
@@ -323,7 +334,7 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         allowed_plmns=_ALLOWED_PLMNS_STR,
         retry_ok=_NRF_RETRY_OK,
         retry_fail=_NRF_RETRY_FAIL,
-        field_errors=state.get("field_errors") or "none",
+        field_errors=field_errors_str,
         error_logs=error_logs or "(no error/warn logs found)",
         nrf_logs=nrf_logs_str,
         rag_context=rag_str,
@@ -410,6 +421,17 @@ def execute_tool(state: AgentState) -> AgentState:
             return {**state, "fix_applied": False,
                     "error": f"PLMN {candidate['mcc']}/{candidate['mnc']} rejected by safety whitelist"}
         log.info(f"[SAFETY] PLMN {candidate['mcc']}/{candidate['mnc']} ✓ confirmed in whitelist")
+
+    # Defense in depth: field typo whitelist check — LLM may guess unknown field corrections
+    if name == "fix_profile_field":
+        wrong_name = args.get("wrong_name", "")
+        if wrong_name not in _FIXABLE_TYPOS:
+            known = sorted(_FIXABLE_TYPOS)
+            log.error(f"[SAFETY] Field '{wrong_name}' not in fixable_typos whitelist — refusing. "
+                      f"Approved: {known}")
+            return {**state, "fix_applied": False,
+                    "error": f"Field '{wrong_name}' not in approved fixable_typos list"}
+        log.info(f"[SAFETY] Field '{wrong_name}' ✓ confirmed in fixable_typos whitelist")
 
     fn = TOOL_MAP.get(name)
     if fn is None:
