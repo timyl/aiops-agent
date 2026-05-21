@@ -41,6 +41,27 @@ _FIXABLE_TYPOS = set(_cfg["nrf"]["fixable_typos"])
 _VENDOR_FIELDS = set(_cfg["nrf"]["vendor_fields"])
 
 
+def _build_fix_action(name: str, args: dict) -> str:
+    """将 tool_call_name + args 转回 fix_action 字符串，供 verify_fix/notify 日志使用。"""
+    if name == "update_pcf_plmn":
+        return f"update_plmn:{args.get('mcc', '?')}:{args.get('mnc', '?')}"
+    if name == "fix_profile_field":
+        return f"fix_field:{args.get('wrong_name', '?')}:{args.get('correct_name', '?')}"
+    return name  # "notify_only" or "no_action"
+
+
+def _name_from_fix_action(state: "AgentState") -> str:
+    """Rules 模式兼容：从 fix_action 字符串推导 tool_call_name。"""
+    action = state.get("fix_action", "notify_only")
+    if action.startswith("update_plmn"):
+        return "update_pcf_plmn"
+    if action.startswith("fix_field"):
+        return "fix_profile_field"
+    if action == "no_action":
+        return "no_action"
+    return "notify_only"
+
+
 # ── Node: fetch_logs ──────────────────────────────────────────────────────────
 
 def fetch_logs(state: AgentState) -> AgentState:
