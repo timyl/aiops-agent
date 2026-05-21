@@ -45,6 +45,6 @@ from tools.pcf_tool import update_pcf_plmn as _pcf_update_plmn
 from tools.pcf_tool import fix_profile_field as _pcf_fix_field
 
 TOOL_MAP: dict[str, callable] = {
-    "update_pcf_plmn":   lambda mcc, mnc: _pcf_update_plmn(mcc, mnc),
-    "fix_profile_field": lambda wrong_name, correct_name: _pcf_fix_field(wrong_name, correct_name),
+    "update_pcf_plmn":   _pcf_update_plmn,
+    "fix_profile_field": _pcf_fix_field,
 }

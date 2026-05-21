@@ -16,7 +16,7 @@ def test_tool_names():
 def test_update_pcf_plmn_schema_has_mcc_mnc():
     from tools.tool_registry import TOOLS
     tool = next(t for t in TOOLS if t.name == "update_pcf_plmn")
-    schema = tool.args_schema.schema()
+    schema = tool.args_schema.model_json_schema()
     props = schema["properties"]
     assert "mcc" in props
     assert "mnc" in props
@@ -25,7 +25,7 @@ def test_update_pcf_plmn_schema_has_mcc_mnc():
 def test_fix_profile_field_schema_has_names():
     from tools.tool_registry import TOOLS
     tool = next(t for t in TOOLS if t.name == "fix_profile_field")
-    schema = tool.args_schema.schema()
+    schema = tool.args_schema.model_json_schema()
     props = schema["properties"]
     assert "wrong_name" in props
     assert "correct_name" in props
