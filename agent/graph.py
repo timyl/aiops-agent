@@ -8,6 +8,7 @@ import yaml
 from datetime import datetime, timezone, timedelta
 from langgraph.graph import StateGraph, END
 from agent.state import AgentState
+from tools.tool_registry import TOOL_MAP
 
 log = logging.getLogger(__name__)
 
@@ -388,6 +389,43 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         "root_cause":      root_cause,
         "confidence":      confidence,
     }
+
+
+# ── Node: execute_tool ────────────────────────────────────────────────────────
+
+def execute_tool(state: AgentState) -> AgentState:
+    """通用 PCF 工具执行节点，替代原 auto_fix + fix_field。"""
+    name = state.get("tool_call_name") or ""
+    args = state.get("tool_call_args") or {}
+
+    log.info(f"[GRAPH] → execute_tool  tool={name}  args={args}")
+
+    # Defense in depth: PLMN whitelist check — independent of LLM output
+    if name == "update_pcf_plmn":
+        candidate = {"mcc": args.get("mcc", ""), "mnc": args.get("mnc", "")}
+        if candidate not in ALLOWED_PLMNS:
+            allowed_str = [f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS]
+            log.error(f"[SAFETY] PLMN {candidate['mcc']}/{candidate['mnc']} not in whitelist — refusing. "
+                      f"Allowed: {allowed_str}")
+            return {**state, "fix_applied": False,
+                    "error": f"PLMN {candidate['mcc']}/{candidate['mnc']} rejected by safety whitelist"}
+        log.info(f"[SAFETY] PLMN {candidate['mcc']}/{candidate['mnc']} ✓ confirmed in whitelist")
+
+    fn = TOOL_MAP.get(name)
+    if fn is None:
+        log.error(f"[EXECUTE] No implementation for tool '{name}'")
+        return {**state, "fix_applied": False, "error": f"No implementation for tool: {name}"}
+
+    log.info(f"[FIX]   > calling {name}(**{args})")
+    try:
+        t0 = time.time()
+        fn(**args)
+        dur = time.time() - t0
+        log.info(f"[EXECUTE] {name} completed  duration={dur:.3f}s")
+        return {**state, "fix_applied": True, "error": None}
+    except Exception as e:
+        log.error(f"[EXECUTE] {name} failed: {e}")
+        return {**state, "fix_applied": False, "error": str(e)}
 
 
 # ── Node: decide ──────────────────────────────────────────────────────────────
