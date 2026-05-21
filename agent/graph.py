@@ -431,19 +431,20 @@ def execute_tool(state: AgentState) -> AgentState:
 # ── Node: decide ──────────────────────────────────────────────────────────────
 
 def decide(state: AgentState) -> str:
-    action     = state.get("fix_action", "notify_only")
+    name       = state.get("tool_call_name") or _name_from_fix_action(state)
     confidence = state.get("confidence", "low")
 
-    if action == "no_action":
-        log.info(f"[GRAPH] → decide  route=end  (alert self-resolved, no active fault)")
+    if name == "no_action":
+        log.info(f"[GRAPH] → decide  route=end  (no_action, alert self-resolved)")
         return END
-    if action.startswith("update_plmn") and confidence in ("high", "medium"):
-        log.info(f"[GRAPH] → decide  route=auto_fix  (plmn mismatch, confidence={confidence})")
-        return "auto_fix"
-    if action.startswith("fix_field") and confidence in ("high", "medium"):
-        log.info(f"[GRAPH] → decide  route=fix_field  (silent drop, confidence={confidence})")
-        return "fix_field"
-    log.info(f"[GRAPH] → decide  route=notify  (action={action}, confidence={confidence})")
+    if name == "notify_only":
+        log.info(f"[GRAPH] → decide  route=notify  (notify_only, outside auto-fix scope)")
+        return "notify"
+    if name in ("update_pcf_plmn", "fix_profile_field"):
+        if confidence in ("high", "medium"):
+            log.info(f"[GRAPH] → decide  route=execute_tool  tool={name}  confidence={confidence}")
+            return "execute_tool"
+    log.info(f"[GRAPH] → decide  route=notify  (tool={name}, confidence={confidence} — escalating)")
     return "notify"
 
 
