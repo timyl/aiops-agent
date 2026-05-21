@@ -286,6 +286,7 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
     from langchain_openai import ChatOpenAI
     from langchain_core.messages import HumanMessage, SystemMessage
     from agent.prompts import SYSTEM_PROMPT, ANALYSIS_PROMPT
+    from tools.tool_registry import TOOLS
 
     log.info(f"[GRAPH] → analyze  (mode=llm)")
 
@@ -294,7 +295,7 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
     _seen: set[str] = set()
     _deduped: list[str] = []
     for _l in reversed(_ew):
-        _key = _l[20:80]        # use middle portion as dedup key (skip timestamp prefix)
+        _key = _l[20:80]
         if _key not in _seen:
             _seen.add(_key)
             _deduped.append(_l[:120])
@@ -310,7 +311,8 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         api_key=os.getenv("DASHSCOPE_API_KEY"),
         base_url=os.getenv("DASHSCOPE_API_HOST"),
         temperature=0,
-    )
+    ).bind_tools(TOOLS)
+
     user_msg = ANALYSIS_PROMPT.format(
         alert_name=state["alert_name"],
         namespace=state["namespace"],
@@ -328,7 +330,7 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
 
     host = os.getenv("DASHSCOPE_API_HOST", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     div  = "─" * 60
-    log.info(f"[LLM]   > POST {host}/chat/completions  model=qwen-max  temperature=0")
+    log.info(f"[LLM]   > POST {host}/chat/completions  model=qwen-max  temperature=0  tools={[t.name for t in TOOLS]}")
     log.info(f"[LLM]   ┌── SYSTEM PROMPT {div[:44]}")
     for line in SYSTEM_PROMPT.splitlines():
         log.info(f"[LLM]   │  {line}")
@@ -341,27 +343,51 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
     response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)])
     dur      = time.time() - t0
 
-    content = response.content.strip()
+    # ── No tool_calls → fall back to rules ──────────────────────────────────
+    if not response.tool_calls:
+        log.warning(f"[LLM]   < {dur:.1f}s  WARNING: no tool_calls in response — falling back to rules")
+        return _analyze_with_rules(state)
+
+    tc        = response.tool_calls[0]
+    tool_name = tc["name"]
+    tool_args = tc["args"]
+    log.info(f"[LLM]   < 200 OK  duration={dur:.1f}s")
+    log.info(f"[LLM]   ── Tool Call {'─'*39}")
+    log.info(f"[LLM]   tool → {tool_name}  args={tool_args}")
+
+    # ── Parse observations/root_cause/confidence from content ───────────────
+    content = (response.content or "").strip()
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
             content = content[4:]
 
+    root_cause = f"Tool '{tool_name}' selected by LLM"
+    confidence = "medium"
     try:
         result = json.loads(content)
-        log.info(f"[LLM]   < 200 OK  duration={dur:.1f}s")
         log.info(f"[LLM]   ── Observations {'─'*36}")
         for i, obs in enumerate(result.get("observations", []), 1):
             log.info(f"[LLM]   [{i}] {obs}")
         log.info(f"[LLM]   ── Diagnosis {'─'*39}")
-        log.info(f"[LLM]   root_cause → {result['root_cause']}")
-        log.info(f"[LLM]   fix_action → {result['fix_action']}  confidence={result['confidence']}")
-        log.info(f"[LLM]   {'─'*52}")
-        return {**state, "root_cause": result["root_cause"],
-                "fix_action": result["fix_action"], "confidence": result["confidence"]}
+        root_cause = result.get("root_cause", root_cause)
+        confidence = result.get("confidence", confidence)
+        log.info(f"[LLM]   root_cause → {root_cause}")
+        log.info(f"[LLM]   confidence → {confidence}")
     except Exception as e:
-        log.warning(f"[LLM]   parse failed ({e}), raw={content[:200]} — falling back to rules")
-        return _analyze_with_rules(state)
+        log.warning(f"[LLM]   content parse failed ({e}) — using tool_call metadata as root_cause")
+
+    log.info(f"[LLM]   tool_call  → {tool_name}({tool_args})")
+    log.info(f"[LLM]   {'─'*52}")
+
+    return {
+        **state,
+        "tool_call_name": tool_name,
+        "tool_call_args":  tool_args,
+        "fix_action":      _build_fix_action(tool_name, tool_args),  # backward compat
+        "root_cause":      root_cause,
+        "confidence":      confidence,
+    }
 
 
 # ── Node: decide ──────────────────────────────────────────────────────────────
