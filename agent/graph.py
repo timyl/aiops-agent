@@ -448,65 +448,6 @@ def decide(state: AgentState) -> str:
     return "notify"
 
 
-# ── Node: auto_fix ────────────────────────────────────────────────────────────
-
-def auto_fix(state: AgentState) -> AgentState:
-    from tools.pcf_tool import update_pcf_plmn
-
-    parts    = state["fix_action"].split(":")
-    mcc, mnc = parts[1], parts[2]
-
-    log.info(f"[GRAPH] → auto_fix")
-
-    # Defense in depth: reject any PLMN not in the config whitelist,
-    # regardless of what the LLM decided. This is a hard code-level gate.
-    candidate = {"mcc": mcc, "mnc": mnc}
-    if candidate not in ALLOWED_PLMNS:
-        allowed_str = [f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS]
-        log.error(f"[SAFETY] PLMN {mcc}/{mnc} not in ALLOWED_PLMNS — refusing to write PCF. "
-                  f"Allowed: {allowed_str}")
-        return {**state, "fix_applied": False,
-                "error": f"PLMN {mcc}/{mnc} rejected by safety whitelist"}
-
-    log.info(f"[SAFETY] PLMN {mcc}/{mnc} ✓ confirmed in whitelist")
-    log.info(f"[FIX]   > PUT {PCF_URL}{PCF_PATH}")
-    log.info(f"[FIX]   > body: plmnList=[{{'mcc':'{mcc}','mnc':'{mnc}'}}]  (was {state['pcf_plmn']})")
-    try:
-        t0     = time.time()
-        result = update_pcf_plmn(mcc, mnc)
-        dur    = time.time() - t0
-        log.info(f"[TOOL/PCF] < 200 OK  duration={dur:.3f}s  new plmnList={result.get('plmnList')}")
-        return {**state, "fix_applied": True, "error": None}
-    except Exception as e:
-        log.error(f"[TOOL/PCF] < ERROR  {e}")
-        return {**state, "fix_applied": False, "error": str(e)}
-
-
-# ── Node: fix_field ───────────────────────────────────────────────────────────
-
-def fix_field(state: AgentState) -> AgentState:
-    from tools.pcf_tool import fix_profile_field
-
-    parts      = state["fix_action"].split(":")
-    wrong_name = parts[1]
-    right_name = parts[2]
-
-    log.info(f"[GRAPH] → fix_field")
-    log.info(f"[FIX]   > GET {PCF_URL}{PCF_PATH}  (fetch full profile)")
-    log.info(f"[FIX]   > renaming field: '{wrong_name}' → '{right_name}'")
-    log.info(f"[FIX]   > PUT {PCF_URL}{PCF_PATH}  (write corrected profile)")
-    try:
-        t0     = time.time()
-        result = fix_profile_field(wrong_name, right_name)
-        dur    = time.time() - t0
-        log.info(f"[TOOL/PCF] < 200 OK  duration={dur:.3f}s")
-        log.info(f"[TOOL/PCF]   profile keys after fix: {list(result.keys())}")
-        return {**state, "fix_applied": True, "error": None}
-    except Exception as e:
-        log.error(f"[TOOL/PCF] < ERROR  {e}")
-        return {**state, "fix_applied": False, "error": str(e)}
-
-
 # ── Node: verify_fix ──────────────────────────────────────────────────────────
 
 def verify_fix(state: AgentState) -> AgentState:
@@ -622,15 +563,14 @@ def notify(state: AgentState) -> AgentState:
 
 def build_graph():
     g = StateGraph(AgentState)
-    g.add_node("fetch_logs",    fetch_logs)
-    g.add_node("fetch_metrics", fetch_metrics)
+    g.add_node("fetch_logs",     fetch_logs)
+    g.add_node("fetch_metrics",  fetch_metrics)
     g.add_node("fetch_nrf_logs", fetch_nrf_logs)
-    g.add_node("rag_lookup",    rag_lookup)
-    g.add_node("analyze",       analyze)
-    g.add_node("auto_fix",      auto_fix)
-    g.add_node("fix_field",     fix_field)
-    g.add_node("verify_fix",    verify_fix)
-    g.add_node("notify",        notify)
+    g.add_node("rag_lookup",     rag_lookup)
+    g.add_node("analyze",        analyze)
+    g.add_node("execute_tool",   execute_tool)
+    g.add_node("verify_fix",     verify_fix)
+    g.add_node("notify",         notify)
 
     g.set_entry_point("fetch_logs")
     g.add_edge("fetch_logs",     "fetch_metrics")
@@ -638,17 +578,15 @@ def build_graph():
     g.add_edge("fetch_nrf_logs", "rag_lookup")
     g.add_edge("rag_lookup",     "analyze")
     g.add_conditional_edges("analyze", decide, {
-        "auto_fix":  "auto_fix",
-        "fix_field": "fix_field",
-        "notify":    "notify",
-        END:         END,
+        "execute_tool": "execute_tool",
+        "notify":       "notify",
+        END:            END,
     })
-    g.add_edge("auto_fix",   "verify_fix")
-    g.add_edge("fix_field",  "verify_fix")
+    g.add_edge("execute_tool", "verify_fix")
     g.add_conditional_edges("verify_fix",
         lambda s: "notify" if not s.get("fix_verified") else END,
         {"notify": "notify", END: END})
-    g.add_edge("notify",     END)
+    g.add_edge("notify", END)
     return g.compile()
 
 
