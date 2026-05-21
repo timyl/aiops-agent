@@ -26,6 +26,10 @@ class AgentState(TypedDict):
     confidence: str              # "high" | "medium" | "low"
     rag_context: list[str]       # knowledge chunks retrieved for LLM
 
+    # Function calling result (LLM mode)
+    tool_call_name: Optional[str]   # e.g. "update_pcf_plmn"
+    tool_call_args: Optional[dict]  # e.g. {"mcc": "510", "mnc": "011"}
+
     # Fix outcome
     fix_applied: bool
     fix_verified: bool
