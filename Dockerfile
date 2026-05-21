@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY agent/   ./agent/
 COPY tools/   ./tools/
 COPY webhook/ ./webhook/
+COPY config/  ./config/
 
 # Incident audit log directory (mount emptyDir or PVC here in K8s)
 RUN mkdir -p /data

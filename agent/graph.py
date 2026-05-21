@@ -1,8 +1,10 @@
 import json
 import logging
 import os
+import pathlib
 import re
 import time
+import yaml
 from datetime import datetime, timezone, timedelta
 from langgraph.graph import StateGraph, END
 from agent.state import AgentState
@@ -14,13 +16,15 @@ logging.getLogger("elastic_transport.transport").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-ALLOWED_PLMNS = [
-    {"mcc": "510", "mnc": "011"},
-    {"mcc": "208", "mnc": "93"},
-    {"mcc": "001", "mnc": "01"},
-    {"mcc": "001", "mnc": "001"},
-    {"mcc": "505", "mnc": "02"},
-]
+def _load_config() -> dict:
+    default = pathlib.Path(__file__).parent.parent / "config" / "agent_config.yaml"
+    path = pathlib.Path(os.getenv("AGENT_CONFIG_PATH", str(default)))
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+_cfg = _load_config()
+
+ALLOWED_PLMNS       = _cfg["plmn"]["allowed"]
 _ALLOWED_PLMNS_STR  = os.getenv("ALLOWED_PLMNS", ",".join(f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS))
 _NRF_RETRY_OK       = int(os.getenv("NRF_RETRY_OK_THRESHOLD",   "3"))
 _NRF_RETRY_FAIL     = int(os.getenv("NRF_RETRY_FAIL_THRESHOLD", "10"))
@@ -33,11 +37,8 @@ PCF_PATH = "/PCF/nf-common-component/v1/nrf-client-nfmanagement/nfProfileList"
 # Regex to extract dropped field names from NRF WARN logs
 _DROPPED_RE = re.compile(r"dropped/ignored\s+\[([^\]]+)\]", re.IGNORECASE)
 
-# Fields that are clear spelling mistakes — safe to auto-fix
-_FIXABLE_TYPOS = {"nfSetIdLists", "nfServiceLists", "plmnLists", "ipv4Address"}
-
-# Known vendor/operator extensions — NOT safe to auto-fix, require human review
-_VENDOR_FIELDS = {"scpInfo", "servingScope", "lcHSupportInd", "olcHSupportInd"}
+_FIXABLE_TYPOS = set(_cfg["nrf"]["fixable_typos"])
+_VENDOR_FIELDS = set(_cfg["nrf"]["vendor_fields"])
 
 
 # ── Node: fetch_logs ──────────────────────────────────────────────────────────
@@ -370,6 +371,18 @@ def auto_fix(state: AgentState) -> AgentState:
     mcc, mnc = parts[1], parts[2]
 
     log.info(f"[GRAPH] → auto_fix")
+
+    # Defense in depth: reject any PLMN not in the config whitelist,
+    # regardless of what the LLM decided. This is a hard code-level gate.
+    candidate = {"mcc": mcc, "mnc": mnc}
+    if candidate not in ALLOWED_PLMNS:
+        allowed_str = [f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS]
+        log.error(f"[SAFETY] PLMN {mcc}/{mnc} not in ALLOWED_PLMNS — refusing to write PCF. "
+                  f"Allowed: {allowed_str}")
+        return {**state, "fix_applied": False,
+                "error": f"PLMN {mcc}/{mnc} rejected by safety whitelist"}
+
+    log.info(f"[SAFETY] PLMN {mcc}/{mnc} ✓ confirmed in whitelist")
     log.info(f"[FIX]   > PUT {PCF_URL}{PCF_PATH}")
     log.info(f"[FIX]   > body: plmnList=[{{'mcc':'{mcc}','mnc':'{mnc}'}}]  (was {state['pcf_plmn']})")
     try:
@@ -542,6 +555,7 @@ def build_graph():
         "auto_fix":  "auto_fix",
         "fix_field": "fix_field",
         "notify":    "notify",
+        END:         END,
     })
     g.add_edge("auto_fix",   "verify_fix")
     g.add_edge("fix_field",  "verify_fix")

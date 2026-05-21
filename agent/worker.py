@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import redis as _redis_lib
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition, OffsetAndMetadata
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -62,7 +62,7 @@ def _save_incident(alert: dict, final_state: dict) -> None:
     log.info(f"[AUDIT] Incident saved → {INCIDENTS_FILE}")
 
 
-def handle_alert(alert: dict) -> None:
+def handle_alert(alert: dict, consumer: KafkaConsumer, partition: int, offset: int) -> None:
     alert_name = alert.get("labels", {}).get("alertname", "unknown")
     namespace  = alert.get("labels", {}).get("namespace", "unknown")
     nf_type    = alert.get("labels", {}).get("NfType", "unknown")
@@ -115,6 +115,9 @@ def handle_alert(alert: dict) -> None:
                 log.error(f"[AGENT] Error       : {final_state.get('error')}")
             log.info("[AGENT] ==========================")
             _save_incident(alert, final_state)
+            tp = TopicPartition(KAFKA_TOPIC, partition)
+            consumer.commit({tp: OffsetAndMetadata(offset + 1, None)})
+            log.info(f"[KAFKA] Committed offset={offset + 1} partition={partition}")
         except Exception as e:
             log.error(f"[AGENT] Unhandled exception: {e}", exc_info=True)
         finally:
@@ -135,7 +138,7 @@ def run_worker() -> None:
         group_id=KAFKA_GROUP,
         value_deserializer=_deserialize,
         auto_offset_reset="latest",
-        enable_auto_commit=True,
+        enable_auto_commit=False,
     )
     log.info("[WORKER] Consumer ready, waiting for alerts...")
 
@@ -145,7 +148,7 @@ def run_worker() -> None:
             continue
         alert = msg.value
         log.info(f"[WORKER] Consumed offset={msg.offset} partition={msg.partition}")
-        t = threading.Thread(target=handle_alert, args=(alert,), daemon=True)
+        t = threading.Thread(target=handle_alert, args=(alert, consumer, msg.partition, msg.offset), daemon=True)
         t.start()
 
 

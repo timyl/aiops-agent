@@ -1,0 +1,26 @@
+plmn:
+  # Whitelist of PLMNs that are valid for this NRF registration.
+  # auto_fix will only write back PLMNs from this list.
+  allowed:
+    - {mcc: "510", mnc: "011"}   # primary operator
+    - {mcc: "208", mnc: "93"}    # test PLMN (lab)
+    - {mcc: "001", mnc: "01"}    # ITU test
+    - {mcc: "001", mnc: "001"}   # ITU test alt
+    - {mcc: "505", mnc: "02"}    # AU test
+
+nrf:
+  # Field names in PCF NF profile that are known spelling mistakes.
+  # These are safe to auto-rename without human review.
+  fixable_typos:
+    - nfSetIdLists      # correct: nfSetIdList
+    - nfServiceLists    # correct: nfServiceList
+    - plmnLists         # correct: plmnList
+    - ipv4Address       # correct: ipv4Addresses
+
+  # Vendor-specific or operator extension fields that NRF silently drops.
+  # NOT safe to auto-fix — require human review before removal.
+  vendor_fields:
+    - scpInfo
+    - servingScope
+    - lcHSupportInd
+    - olcHSupportInd
