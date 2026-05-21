@@ -56,7 +56,7 @@ metadata:
 spec:
   selector:
     app: aiops-webhook
-  type: ClusterIP
+  type: LoadBalancer
   ports:
     - port: 8000
       targetPort: 8000

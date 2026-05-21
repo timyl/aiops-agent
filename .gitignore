@@ -26,9 +26,11 @@ testing-logs/
 .idea/
 *.code-workspace
 
-# Local notes / html exports
+# Local notes / html exports / interview prep
 notes-*.txt
 session_notes.md
 PROGRESS.md
+TECHNICAL_REVIEW.md
+INTERVIEW_PREP.md
 bailian_rag_note.txt
 *.html
