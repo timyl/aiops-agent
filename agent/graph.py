@@ -218,16 +218,20 @@ def rag_lookup(state: AgentState) -> AgentState:
 
     field_errors   = state.get("field_errors", [])
     unknown_fields = state.get("unknown_fields", [])
-    if not field_errors:
-        reason = (f"unknown fields {unknown_fields} — no RAG needed, LLM will notify_only"
-                  if unknown_fields else "no dropped fields detected")
-        log.info(f"[GRAPH] → rag_lookup  (skipped — {reason})")
+    all_fields     = field_errors + unknown_fields
+    if not all_fields:
+        log.info(f"[GRAPH] → rag_lookup  (skipped — no dropped fields detected)")
         return {**state, "rag_context": []}
 
-    log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for {field_errors})")
+    if field_errors and unknown_fields:
+        log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for fixable={field_errors} unknown={unknown_fields})")
+    elif field_errors:
+        log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for {field_errors})")
+    else:
+        log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for unknown fields {unknown_fields} — context for notify message)")
 
     chunks = []
-    for field in field_errors:
+    for field in all_fields:
         log.info(f"[LLM]   > RAG query: field name '{field}'")
         results = get_field_info(field)
         log.info(f"[LLM]   < RAG returned {len(results)} chunk(s)")

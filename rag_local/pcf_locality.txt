@@ -1,0 +1,7 @@
+locality: 3GPP TS 29.510 correct field name. 
+String indicating the geographic location or deployment site of the NF instance. 
+Example values: 'Beijing', 'Shanghai', 'DC-East'. 
+Used for locality-aware NF selection — AMF/SMF prefer NFs in the same locality. 
+Oracle NRF accepts and stores this field.
+localityLists: INVALID — not a 3GPP TS 29.510 field. 
+Common typo: extra 's' appended to locality. Oracle NRF silently drops with WARN log. Fix: use locality.
