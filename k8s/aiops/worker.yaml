@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: dockergeng/aiops-agent:latest
+          image: 172.16.100.100:5000/aiops-agent:latest
           imagePullPolicy: Always
           command:
             - python
@@ -31,6 +31,9 @@ spec:
           volumeMounts:
             - name: incident-data
               mountPath: /data
+            - name: agent-config
+              mountPath: /app/config/agent_config.yaml
+              subPath: agent_config.yaml
           resources:
             requests:
               cpu: "200m"
@@ -41,3 +44,6 @@ spec:
       volumes:
         - name: incident-data
           emptyDir: {}
+        - name: agent-config
+          configMap:
+            name: aiops-agent-config
