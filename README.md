@@ -2,7 +2,7 @@
 
 > An autonomous AIOps agent that monitors 5G core network NF registration failures, localizes root causes, applies configuration fixes, and verifies recovery — end-to-end in minutes.
 
-**Stack:** LangGraph · OpenAI GPT / OCI Generative AI / qwen-max · OCI OpenSearch RAG / Alibaba Bailian RAG · Kafka · Redis · Kubernetes · Prometheus · Elasticsearch
+**Stack:** LangGraph · qwen-max (function calling) / OCI Generative AI · Alibaba Bailian RAG / OCI OpenSearch RAG · Kafka · Redis · Kubernetes · Prometheus · Elasticsearch
 
 ---
 
@@ -40,7 +40,7 @@ Escalate immediately          ████░░░░░░░░░░░░�
 
 ## Architecture
 
-```
+```text
 AlertManager ──► Kafka (aiops-alerts topic)
                      │
                      ▼
@@ -55,20 +55,27 @@ AlertManager ──► Kafka (aiops-alerts topic)
                                       ▼
                                   rag_lookup  ──► Vector Knowledge Base
                                       ▼
-                                   analyze   ──► LLM (GPT / OCI Llama)
+                                   analyze   ──► LLM (qwen-max, function calling)
+                                      │            bind_tools → tool_calls
                                       ▼
-                                   decide()  [deterministic routing]
-                          ┌──────────┴──────────┐──────────┐
-                          ▼                     ▼          ▼
-                      auto_fix            fix_field    notify ──► Slack
-                          └──────────┬──────────┘
-                                     ▼
-                               verify_fix  (3× retry, 30/60/90s backoff)
-                                     ▼
-                               incidents.jsonl  (audit log)
+                                   decide()  [deterministic routing on tool_call_name]
+                          ┌──────────┴──────────────────┐
+                          ▼                             ▼
+                    execute_tool                      notify ──► Slack
+                    ├── PLMN whitelist gate
+                    ├── fixable_typos whitelist gate
+                    └── pcf_update_plmn / pcf_fix_field
+                          │
+                          ▼
+                      verify_fix  (Prometheus rate / field key check)
+                          │
+                          ▼
+                    incidents.jsonl  (audit log)
 ```
 
 **Webhook flow:** AlertManager → `aiops-webhook` (FastAPI, Kafka producer) → returns 200 immediately → Kafka consumer handles async
+
+**Safety design:** Two independent whitelists in `execute_tool` enforce boundaries regardless of LLM output — PLMN whitelist for `update_pcf_plmn`, `fixable_typos` whitelist for `fix_profile_field`. Unauthorized calls are rejected and escalated to Slack.
 
 ---
 
@@ -121,16 +128,21 @@ The agent covers the full PCF alert ruleset. Actions fall into three tiers:
 
 ## Prompt Engineering
 
-Three-layer separation of concerns:
+Four-layer separation of concerns:
 
-```
-SYSTEM_PROMPT   — role + output contract only (15 lines, stable)
-ANALYSIS_PROMPT — parameterized evidence template ({allowed_plmns}, {retry_ok}, etc.)
+```text
+SYSTEM_PROMPT   — role definition + tool catalog (4 tools, stable)
+ANALYSIS_PROMPT — parameterized evidence template ({allowed_plmns}, {field_errors}, etc.)
 RAG chunks      — 3GPP field knowledge (retrieved at runtime, not hardcoded)
-decide()        — deterministic routing logic in Python (not LLM)
+decide()        — deterministic routing on tool_call_name in Python (not LLM)
 ```
 
-LLM only extracts structured diagnosis from evidence. All routing and execution is in code.
+**Function calling flow:** LLM receives tool schemas via `llm.bind_tools(TOOLS)` and responds with a structured `tool_calls` object — no string parsing. `execute_tool` dispatches on `tool_call_name` and enforces whitelists independently of LLM reasoning.
+
+```text
+LLM role  →  diagnosis + intent expression (tool_calls)
+Code role →  routing (decide) + enforcement (execute_tool whitelists) + execution (PCF API)
+```
 
 ---
 
@@ -145,10 +157,11 @@ aiops-agent/
 │   ├── worker.py         # Kafka consumer + Redis dedup + Semaphore
 │   └── log_fmt.py        # Structured log formatter
 ├── tools/
-│   ├── es_tool.py        # Elasticsearch log query
-│   ├── prometheus_tool.py# Prometheus metrics query
-│   ├── pcf_tool.py       # PCF config read/write (3GPP SBA REST)
-│   └── rag_tool.py       # RAG retrieval (OCI OpenSearch / Alibaba Bailian)
+│   ├── es_tool.py         # Elasticsearch log query
+│   ├── prometheus_tool.py # Prometheus metrics query
+│   ├── pcf_tool.py        # PCF config read/write (3GPP SBA REST)
+│   ├── rag_tool.py        # RAG retrieval (OCI OpenSearch / Alibaba Bailian)
+│   └── tool_registry.py   # LangChain @tool definitions + TOOLS (bind) + TOOL_MAP (dispatch)
 ├── webhook/
 │   └── server.py         # FastAPI: AlertManager → Kafka producer
 ├── k8s/
@@ -274,136 +287,124 @@ redis           1/1     1            1           9h
 
 ### Scenario 1 — PLMN Mismatch (auto-fix in ~2 min)
 
-Alert fires → agent fetches evidence → LLM diagnoses → PLMN corrected via PCF REST API → verified.
+Alert fires → agent fetches evidence → LLM calls `update_pcf_plmn` via function calling → PLMN whitelist gate passes → PCF REST API fix → Prometheus rate verified.
 
-```
-[ALERT]  NfRegistrationFailure | ns=5gpcf | NfType=PCF | status=firing
-[AGENT]  Starting LangGraph agent for 5gpcf...
+```text
+[ALERT]  NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
+[AGENT]  Starting LangGraph agent for occnp2...
 
-[TOOL/PM] nrf_retry_rate=20.0/2min  (healthy < 3, active failure loop > 10)
-[TOOL/PCF] plmnList=[{'mcc':'510','mnc':'089'}]  local_status=PCF_LOCAL_REGISTERED
-[TOOL/ES] PCF WARN — Error Response from NRF: 501 (PLMN not allowed)
-[GRAPH]  → analyze  (mode=llm)
+[GRAPH]  → fetch_logs      PCF ERROR/WARN logs retrieved from Elasticsearch
+[GRAPH]  → fetch_metrics   nrf_retry_rate=10.7/2min  (threshold > 3)
+[GRAPH]  → fetch_nrf_logs  no dropped fields detected
+[GRAPH]  → rag_lookup      skipped — no dropped fields detected
+[GRAPH]  → analyze         (mode=llm)
 
-[LLM]  > POST /chat/completions  model=gpt  temperature=0
-[LLM]  ┌── SYSTEM PROMPT ──────────────────────────────────────────────
-[LLM]  │  You are a 5G core network SRE agent specializing in NF
-[LLM]  │  registration diagnostics.
-[LLM]  │
-[LLM]  │  Output contract:
-[LLM]  │  - root_cause : one concise sentence describing the confirmed fault
-[LLM]  │  - fix_action : "update_plmn:<mcc>:<mnc>"  |  "fix_field:<wrong>:<correct>"
-[LLM]  │                 "notify_only"               |  "no_action"
-[LLM]  │  - confidence : "high" | "medium" | "low"
-[LLM]  └───────────────────────────────────────────────────────────────
-[LLM]  ┌── USER MESSAGE (ANALYSIS_PROMPT) ─────────────────────────────
-[LLM]  │  Alert: NfRegistrationFailure | namespace: 5gpcf
-[LLM]  │
-[LLM]  │  === EVIDENCE ===
-[LLM]  │  NRF retry rate (2min): 20.0  [healthy < 3, active failure loop > 10]
-[LLM]  │  PCF local status: PCF_LOCAL_REGISTERED
-[LLM]  │  PCF plmnList: [{'mcc': '510', 'mnc': '089'}]
-[LLM]  │  Allowed PLMNs: 510/011, 208/93, 001/01, 001/001, 505/02
-[LLM]  │  Silent-drop field errors: none
-[LLM]  │
-[LLM]  │  === PCF LOGS (ERROR/WARN) ===
-[LLM]  │  WARN nrf-client: Request rejected — PLMN 510/089 not allowed
-[LLM]  │  ERROR nrf-client: Error Response received from NRF: 501
-[LLM]  │
-[LLM]  │  Respond in JSON: { observations, root_cause, fix_action, confidence }
-[LLM]  └───────────────────────────────────────────────────────────────
-[LLM]  < 200 OK  duration=4.4s
-[LLM]  ── Observations ────────────────────────────────────
-[LLM]  [1] NRF retry rate is 20.0, indicating an active failure loop.
-[LLM]  [2] PCF plmnList contains 510/089, not in allowed list (510/011, ...).
-[LLM]  [3] No silent-drop field errors detected.
-[LLM]  ── Diagnosis ───────────────────────────────────────
-[LLM]  root_cause → PCF plmnList contains PLMN 510/089 not accepted by NRF.
-[LLM]  fix_action → update_plmn:510:011  confidence=high
-[LLM]  ────────────────────────────────────────────────────
+[LLM]    > POST /compatible-mode/v1/chat/completions  model=qwen-max
+[LLM]    ┌── Evidence sent to LLM ─────────────────────────────────────
+[LLM]    │  NRF retry rate: 10.7  [active failure loop > 10]
+[LLM]    │  PCF plmnList: [{'mcc': '510', 'mnc': '088'}]
+[LLM]    │  Allowed PLMNs: 510/011, 208/93, 001/01
+[LLM]    │  Silent-drop field errors: none
+[LLM]    │  PCF logs: WARN nrf-client: PLMN 510/088 not in allowed list
+[LLM]    └────────────────────────────────────────────────────────────
+[LLM]    < 200 OK  duration=5.1s
+[LLM]    ── Observations ────────────────────────────────────
+[LLM]    [1] NRF retry rate 10.7 confirms active registration failure loop.
+[LLM]    [2] PCF plmnList 510/088 is not in the allowed PLMN list.
+[LLM]    [3] No silent-drop field errors detected.
+[LLM]    ── Diagnosis ───────────────────────────────────────
+[LLM]    root_cause → PCF plmnList contains PLMN 510/088 not accepted by NRF.
+[LLM]    confidence → high
+[LLM]    tool_call  → update_pcf_plmn({'mcc': '510', 'mnc': '011'})
+[LLM]    ────────────────────────────────────────────────────
 
-[GRAPH] → decide  route=auto_fix  (plmn mismatch, confidence=high)
-[GRAPH] → auto_fix
-[FIX]   > PUT /nrf-client-nfmanagement/nfProfileList
-[FIX]   > body: plmnList=[{'mcc':'510','mnc':'011'}]  (was [{'mcc':'510','mnc':'089'}])
-[PCF]   < 200 OK  duration=0.048s
+[GRAPH]  → decide  route=execute_tool  tool=update_pcf_plmn  confidence=high
+[GRAPH]  → execute_tool  tool=update_pcf_plmn  args={'mcc': '510', 'mnc': '011'}
+[SAFETY] PLMN 510/011 ✓ confirmed in whitelist
+[EXECUTE] > PUT /nrf-client-nfmanagement/nfProfileList
+[EXECUTE] > plmnList=[{'mcc':'510','mnc':'011'}]  (was [{'mcc':'510','mnc':'088'}])
+[PCF]    < 200 OK  duration=0.048s
 
-[GRAPH] → verify_fix  attempt 1/3  (sleeping 30s...)
-[VERIFY] rate=24.0 >= 3  ✗ Still recovering — will retry
-[GRAPH] → verify_fix  attempt 2/3  (sleeping 60s...)
-[VERIFY] rate=8.0  (dropped >50% from 20.0)  ✓ Fix taking effect
+[GRAPH]  → verify_fix  attempt 1/3  (sleeping 30s)
+[VERIFY] nrf_retry_rate=6.3 >= 3  still recovering — retry
+[GRAPH]  → verify_fix  attempt 2/3  (sleeping 60s)
+[VERIFY] nrf_retry_rate=0.0 < 3  ✓ registration restored
 
-[AGENT] ===== Run Complete =====
-[AGENT] Root cause  : PCF plmnList contains PLMN (510/089) not accepted by NRF.
-[AGENT] Fix action  : update_plmn:510:011
-[AGENT] Confidence  : high
-[AGENT] Fix applied : True
-[AGENT] Fix verified: True
-[AUDIT] Incident saved → /data/incidents.jsonl
+[AGENT]  ===== Run Complete =====
+[AGENT]  Root cause  : PCF plmnList contains PLMN 510/088 not accepted by NRF.
+[AGENT]  Fix applied : True  |  Fix verified: True
+[AUDIT]  Incident saved → /data/incidents.jsonl
 ```
 
 ---
 
-### Scenario 2 — Silent-Drop Field Typo (auto-fix in ~12 sec)
+### Scenario 2 — Silent-Drop Field Typo (auto-fix in ~5 sec)
 
-NRF silently drops a misspelled field; PCF thinks registration succeeded (200 OK) but NF profile is incomplete. Agent detects via NRF WARN logs + RAG lookup.
+NRF silently drops a misspelled field; PCF thinks registration succeeded (HTTP 200) but NF profile is incomplete. Agent detects via NRF WARN logs + RAG lookup, fixes via PCF REST API, verifies by checking profile keys.
 
 ```text
-[ALERT]  NfRegistrationFailure | ns=5gpcf | NfType=PCF | status=firing
-[AGENT]  Starting LangGraph agent for 5gpcf...
+[ALERT]  NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
+[AGENT]  Starting LangGraph agent for occnp2...
 
-[TOOL/PM]  nrf_retry_rate=0.0/2min  (no hard rejection loop)
-[TOOL/PCF] plmnList=[{'mcc':'510','mnc':'011'}]  ✓ PLMN is correct
-[TOOL/ES]  ⚠ PCF field typo detected (auto-fixable): 'nfSetIdLists'
-[TOOL/ES]    WARN ocnrf [requesterNfType=PCF]: Allow only VendorSpecific
-             attributes — field 'nfSetIdLists' is not a valid 3GPP attribute
-[GRAPH]  → rag_lookup  (field typo detected, querying knowledge base)
-[RAG]    query="nfSetIdLists nfSetIdList 3GPP NF profile"
-[RAG]    top chunk: "Per 3GPP TS 29.510 §6.2.2, the correct field name is
-          'nfSetIdList' (no trailing 's'). NRF silently drops unrecognized
-          attributes — registration returns 200 but the field is absent."
+[GRAPH]  → fetch_metrics   nrf_retry_rate=0.0  (no hard rejection loop)
+[GRAPH]  → fetch_nrf_logs  ⚠ fixable typo detected: 'nfSetIdLists'
+[GRAPH]               WARN ocnrf [requesterNfType=PCF]: Allow only VendorSpecific
+[GRAPH]               attributes — field 'nfSetIdLists' is not a valid 3GPP attribute
+[GRAPH]  → rag_lookup  querying knowledge base for 'nfSetIdLists'
+[RAG]    top chunk: "Per 3GPP TS 29.510 §6.2.2, correct field is 'nfSetIdList'
+                    (no trailing 's'). NRF silently drops unrecognized attributes."
 [GRAPH]  → analyze  (mode=llm)
-[LLM]  < 200 OK  duration=3.9s
-[LLM]  root_cause → Field 'nfSetIdLists' is a typo of 'nfSetIdList';
-                     NRF silently drops it causing incomplete NF profile.
-[LLM]  fix_action → fix_field:nfSetIdLists:nfSetIdList  confidence=high
+[LLM]    < 200 OK  duration=4.2s
+[LLM]    ── Diagnosis ───────────────────────────────────────
+[LLM]    root_cause → Field 'nfSetIdLists' is a typo; NRF silently drops it.
+[LLM]    confidence → high
+[LLM]    tool_call  → fix_profile_field({'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'})
+[LLM]    ────────────────────────────────────────────────────
 
-[GRAPH] → decide  route=fix_field  (field typo, confidence=high)
-[GRAPH] → fix_field
-[FIX]   > PATCH /nrf-client-nfmanagement/nfProfileList
-[FIX]   > rename field 'nfSetIdLists' → 'nfSetIdList'
-[PCF]   < 200 OK  duration=0.051s
+[GRAPH]  → decide  route=execute_tool  tool=fix_profile_field  confidence=high
+[GRAPH]  → execute_tool  tool=fix_profile_field
+[SAFETY] Field 'nfSetIdLists' ✓ confirmed in fixable_typos whitelist
+[EXECUTE] > PATCH /nrf-client-nfmanagement/nfProfileList
+[EXECUTE] > rename 'nfSetIdLists' → 'nfSetIdList'
+[PCF]    < 200 OK  duration=0.051s
 
-[GRAPH] → verify_fix  attempt 1/3  (sleeping 30s...)
-[VERIFY] NRF WARN logs cleared  ✓ Field accepted by NRF
+[VERIFY] field key 'nfSetIdList' present ✓  |  'nfSetIdLists' absent ✓
 
-[AGENT] ===== Run Complete =====
-[AGENT] Root cause  : PCF field 'nfSetIdLists' silently dropped by NRF.
-[AGENT] Fix action  : fix_field:nfSetIdLists:nfSetIdList
-[AGENT] Confidence  : high
-[AGENT] Fix applied : True
-[AGENT] Fix verified: True
-[AUDIT] Incident saved → /data/incidents.jsonl
+[AGENT]  ===== Run Complete =====
+[AGENT]  Root cause  : PCF field 'nfSetIdLists' silently dropped by NRF.
+[AGENT]  Fix applied : True  |  Fix verified: True
+[AUDIT]  Incident saved → /data/incidents.jsonl
 ```
 
 ---
 
-### Scenario 3 — Unknown Field (notify only → Slack)
+### Scenario 3 — Unknown Field (safety gate blocks → Slack escalation)
 
-Field name is not in the auto-fix whitelist; agent escalates to on-call via Slack.
+Field name is not in the `fixable_typos` whitelist. Even if the LLM infers a correction using 3GPP training knowledge, `execute_tool` rejects the call at the code layer and escalates to Slack.
 
 ```text
-[LLM]  root_cause → Unknown field 'capacities' dropped by NRF; not in auto-fix scope.
-[LLM]  fix_action → notify_only  confidence=high
+[GRAPH]  → fetch_nrf_logs  ⚠ unknown dropped field: 'nfSetIdListxxx' (not in fixable_typos)
+[GRAPH]  → rag_lookup  skipped — unknown fields ['nfSetIdListxxx'] — no RAG needed
+[GRAPH]  → analyze  (mode=llm)
+[LLM]    ── Diagnosis ───────────────────────────────────────
+[LLM]    root_cause → Field 'nfSetIdListxxx' is causing NRF to silently drop it.
+[LLM]    confidence → high
+[LLM]    tool_call  → fix_profile_field({'wrong_name': 'nfSetIdListxxx', 'correct_name': 'nfSetIdList'})
+[LLM]    ────────────────────────────────────────────────────
 
-[GRAPH] → decide  route=notify  (notify_only)
-[GRAPH] → notify
-[SLACK] POST https://hooks.slack.com/...
-[SLACK] > "NfRegistrationFailure in 5gpcf — unknown dropped field: 'capacities'.
-           Manual intervention required."
-[SLACK] < 200 OK
+[GRAPH]  → decide  route=execute_tool  tool=fix_profile_field  confidence=high
+[GRAPH]  → execute_tool  tool=fix_profile_field
+[SAFETY] Field 'nfSetIdListxxx' not in fixable_typos whitelist — refusing.
+[SAFETY] Approved: ['ipv4Address', 'nfServiceLists', 'nfSetIdLists', 'plmnLists']
+[GRAPH]  → notify  (human escalation — no applicable auto-fix for this fault)
+[ESCALATION] Alert: NfRegistrationFailure | ns=occnp2
+[ESCALATION] Root cause: Field 'nfSetIdListxxx' dropped by NRF — not in approved fixable list
+[ESCALATION] → Human operator intervention required
+[NOTIFY] Slack notified  status=200
+[AUDIT]  Incident saved → /data/incidents.jsonl
 ```
-<img width="865" height="227" alt="image" src="https://github.com/user-attachments/assets/7df04bef-8273-48ec-bb92-96a0cf8c0e4e" />
+
+![Slack escalation alert](https://github.com/user-attachments/assets/7df04bef-8273-48ec-bb92-96a0cf8c0e4e)
 
 
 ---
