@@ -443,9 +443,11 @@ def execute_tool(state: AgentState) -> AgentState:
     if name == "update_pcf_plmn":
         candidate = {"mcc": args.get("mcc", ""), "mnc": args.get("mnc", "")}
         if candidate not in ALLOWED_PLMNS:
+            from agent.metrics import SAFETY_GATE_REJECTED
             allowed_str = [f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS]
             log.error(f"[SAFETY] PLMN {candidate['mcc']}/{candidate['mnc']} not in whitelist — refusing. "
                       f"Allowed: {allowed_str}")
+            SAFETY_GATE_REJECTED.inc()
             return {**state, "fix_applied": False,
                     "error": f"PLMN {candidate['mcc']}/{candidate['mnc']} rejected by safety whitelist"}
         log.info(f"[SAFETY] PLMN {candidate['mcc']}/{candidate['mnc']} ✓ confirmed in whitelist")
@@ -454,9 +456,11 @@ def execute_tool(state: AgentState) -> AgentState:
     if name == "fix_profile_field":
         wrong_name = args.get("wrong_name", "")
         if wrong_name not in _FIXABLE_TYPOS:
+            from agent.metrics import SAFETY_GATE_REJECTED
             known = sorted(_FIXABLE_TYPOS)
             log.error(f"[SAFETY] Field '{wrong_name}' not in fixable_typos whitelist — refusing. "
                       f"Approved: {known}")
+            SAFETY_GATE_REJECTED.inc()
             return {**state, "fix_applied": False,
                     "error": f"Field '{wrong_name}' not in approved fixable_typos list"}
         log.info(f"[SAFETY] Field '{wrong_name}' ✓ confirmed in fixable_typos whitelist")

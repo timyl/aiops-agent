@@ -71,3 +71,21 @@ def test_llm_tokens_labels_are_valid():
     from agent.metrics import LLM_TOKENS
     LLM_TOKENS.labels(type="prompt").inc(0)
     LLM_TOKENS.labels(type="completion").inc(0)
+
+
+def test_safety_gate_rejected_increments_on_unknown_field():
+    """execute_tool must increment SAFETY_GATE_REJECTED when field not in fixable_typos."""
+    import agent.graph as g
+    from agent.metrics import SAFETY_GATE_REJECTED
+
+    before = SAFETY_GATE_REJECTED._value.get()
+
+    state = {
+        "tool_call_name": "fix_profile_field",
+        "tool_call_args": {"wrong_name": "totallyUnknownField999", "correct_name": "something"},
+        "alert_start_time": None,
+    }
+    g.execute_tool(state)
+
+    after = SAFETY_GATE_REJECTED._value.get()
+    assert after == before + 1, f"SAFETY_GATE_REJECTED should have incremented by 1, got delta={after - before}"
