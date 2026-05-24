@@ -44,5 +44,5 @@ RAG_DURATION = Histogram(
 RAG_CHUNKS = Histogram(
     "aiops_rag_chunks_returned",
     "Number of unique RAG chunks returned per alert",
-    buckets=[0, 1, 2, 3, 5, 10],
+    buckets=[1, 2, 3, 5, 8, 10],
 )

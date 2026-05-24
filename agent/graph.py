@@ -381,6 +381,8 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         LLM_TOKENS.labels(type="prompt").inc(_prompt_tokens)
     if _completion_tokens:
         LLM_TOKENS.labels(type="completion").inc(_completion_tokens)
+    if not _prompt_tokens and not _completion_tokens:
+        log.warning("[LLM]   tokens: usage data unavailable — LLM response missing usage_metadata and response_metadata.token_usage")
     log.info(f"[LLM]   tokens: prompt={_prompt_tokens}  completion={_completion_tokens}")
 
     # ── No tool_calls → fall back to rules ──────────────────────────────────
