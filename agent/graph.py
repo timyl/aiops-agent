@@ -489,7 +489,12 @@ def decide(state: AgentState) -> str:
     confidence = state.get("confidence", "low")
 
     if name == "no_action":
+        from agent.metrics import ALERTS_PROCESSED, ALERT_DURATION
         log.info(f"[GRAPH] → decide  route=end  (no_action, alert self-resolved)")
+        ALERTS_PROCESSED.labels(outcome="no_action").inc()
+        _start = state.get("alert_start_time")
+        if _start:
+            ALERT_DURATION.observe(time.time() - _start)
         return END
     if name == "notify_only":
         log.info(f"[GRAPH] → decide  route=notify  (notify_only, outside auto-fix scope)")
@@ -529,10 +534,18 @@ def verify_fix(state: AgentState) -> AgentState:
         has_wrong   = wrong_name in profile
 
         if has_correct and not has_wrong:
+            from agent.metrics import FIX_VERIFIED, ALERTS_PROCESSED, ALERT_DURATION
             log.info(f"[VERIFY] profile has '{right_name}', '{wrong_name}' absent  ✓ Field fix confirmed")
+            FIX_VERIFIED.labels(result="success").inc()
+            ALERTS_PROCESSED.labels(outcome="auto_fixed").inc()
+            _start = state.get("alert_start_time")
+            if _start:
+                ALERT_DURATION.observe(time.time() - _start)
             return {**state, "fix_verified": True}
         else:
+            from agent.metrics import FIX_VERIFIED
             log.info(f"[VERIFY] '{right_name}' present={has_correct}  '{wrong_name}' present={has_wrong}  ✗ Fix incomplete")
+            FIX_VERIFIED.labels(result="failure").inc()
             return {**state, "fix_verified": False}
 
     # For PLMN fixes: poll Prometheus rate
@@ -561,6 +574,13 @@ def verify_fix(state: AgentState) -> AgentState:
         else:
             log.info(f"[VERIFY] rate={rate['value']:.1f} >= 3  ✗ Still recovering{' — will retry' if attempt < 3 else ' — giving up'}")
 
+    from agent.metrics import FIX_VERIFIED, ALERTS_PROCESSED, ALERT_DURATION
+    FIX_VERIFIED.labels(result="success" if healthy else "failure").inc()
+    if healthy:
+        ALERTS_PROCESSED.labels(outcome="auto_fixed").inc()
+        _start = state.get("alert_start_time")
+        if _start:
+            ALERT_DURATION.observe(time.time() - _start)
     return {**state, "fix_verified": healthy}
 
 
@@ -581,6 +601,11 @@ def notify(state: AgentState) -> AgentState:
     else:
         reason = "no applicable auto-fix for this fault"
 
+    from agent.metrics import ALERTS_PROCESSED, ALERT_DURATION
+    ALERTS_PROCESSED.labels(outcome="escalated").inc()
+    _start = state.get("alert_start_time")
+    if _start:
+        ALERT_DURATION.observe(time.time() - _start)
     log.warning(f"[GRAPH] → notify  (human escalation — {reason})")
     log.warning(f"[ESCALATION] {sep}")
     log.warning(f"[ESCALATION] Alert     : {state['alert_name']} | ns={state['namespace']}")

@@ -89,3 +89,29 @@ def test_safety_gate_rejected_increments_on_unknown_field():
 
     after = SAFETY_GATE_REJECTED._value.get()
     assert after == before + 1, f"SAFETY_GATE_REJECTED should have incremented by 1, got delta={after - before}"
+
+
+def test_notify_increments_alerts_processed_escalated():
+    """notify() must increment ALERTS_PROCESSED with outcome=escalated."""
+    import agent.graph as g
+    from agent.metrics import ALERTS_PROCESSED
+    import time as _time
+
+    before = ALERTS_PROCESSED.labels(outcome="escalated")._value.get()
+
+    state = {
+        "alert_name": "TestAlert",
+        "namespace": "occnp2",
+        "fix_applied": False,
+        "fix_verified": None,
+        "fix_action": "notify_only",
+        "confidence": "low",
+        "root_cause": "test",
+        "all_dropped_fields": [],
+        "alert_start_time": _time.time() - 2.0,
+    }
+
+    g.notify(state)
+
+    after = ALERTS_PROCESSED.labels(outcome="escalated")._value.get()
+    assert after == before + 1, "ALERTS_PROCESSED[escalated] should have incremented"
