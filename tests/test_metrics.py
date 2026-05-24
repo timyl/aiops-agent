@@ -64,3 +64,10 @@ def test_rag_lookup_observes_metrics():
 
     assert after > before, "RAG_DURATION histogram was not observed"
     assert result.get("rag_context") == ["chunk_a for nfSetIdLists", "chunk_b for nfSetIdLists"]
+
+
+def test_llm_tokens_labels_are_valid():
+    """LLM_TOKENS counter must accept 'prompt' and 'completion' labels without error."""
+    from agent.metrics import LLM_TOKENS
+    LLM_TOKENS.labels(type="prompt").inc(0)
+    LLM_TOKENS.labels(type="completion").inc(0)

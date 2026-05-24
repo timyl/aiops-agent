@@ -361,9 +361,27 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
         log.info(f"[LLM]   │  {line}")
     log.info(f"[LLM]   └{div}")
 
+    from agent.metrics import LLM_DURATION, LLM_TOKENS
+
     t0       = time.time()
     response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)])
     dur      = time.time() - t0
+    LLM_DURATION.observe(dur)
+
+    # Extract token counts — try usage_metadata (langchain>=0.3) then response_metadata fallback
+    _usage = getattr(response, "usage_metadata", None) or {}
+    _prompt_tokens     = _usage.get("input_tokens", 0)
+    _completion_tokens = _usage.get("output_tokens", 0)
+    if not _prompt_tokens:
+        _rm = getattr(response, "response_metadata", {})
+        _tu = _rm.get("token_usage", {})
+        _prompt_tokens     = _tu.get("prompt_tokens", 0)
+        _completion_tokens = _tu.get("completion_tokens", 0)
+    if _prompt_tokens:
+        LLM_TOKENS.labels(type="prompt").inc(_prompt_tokens)
+    if _completion_tokens:
+        LLM_TOKENS.labels(type="completion").inc(_completion_tokens)
+    log.info(f"[LLM]   tokens: prompt={_prompt_tokens}  completion={_completion_tokens}")
 
     # ── No tool_calls → fall back to rules ──────────────────────────────────
     if not response.tool_calls:
