@@ -1,0 +1,56 @@
+---
+# Headless service so Prometheus can discover worker pods directly.
+# The worker exposes its own Prometheus HTTP server on port 9100.
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-worker-metrics
+  namespace: aiops
+  labels:
+    app: aiops-worker
+spec:
+  selector:
+    app: aiops-worker
+  clusterIP: None
+  ports:
+    - port: 9100
+      targetPort: 9100
+      name: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aiops-webhook
+  namespace: aiops
+  labels:
+    app: aiops-webhook
+spec:
+  selector:
+    matchLabels:
+      app: aiops-webhook
+  namespaceSelector:
+    matchNames:
+      - aiops
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aiops-worker
+  namespace: aiops
+  labels:
+    app: aiops-worker
+spec:
+  selector:
+    matchLabels:
+      app: aiops-worker
+  namespaceSelector:
+    matchNames:
+      - aiops
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s

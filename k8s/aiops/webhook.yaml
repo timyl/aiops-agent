@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: webhook
-          image: dockergeng/aiops-agent:latest
+          image: 172.16.100.100:5000/aiops-agent:latest
           imagePullPolicy: Always
           command:
             - uvicorn
@@ -29,6 +29,7 @@ spec:
             - "8000"
           ports:
             - containerPort: 8000
+              name: metrics
           envFrom:
             - configMapRef:
                 name: aiops-config
@@ -53,6 +54,8 @@ kind: Service
 metadata:
   name: aiops-webhook
   namespace: aiops
+  labels:
+    app: aiops-webhook
 spec:
   selector:
     app: aiops-webhook
@@ -60,3 +63,4 @@ spec:
   ports:
     - port: 8000
       targetPort: 8000
+      name: metrics
