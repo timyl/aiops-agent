@@ -40,3 +40,27 @@ def test_agent_state_has_alert_start_time():
     import typing
     hints = typing.get_type_hints(AgentState)
     assert "alert_start_time" in hints, "AgentState missing alert_start_time field"
+
+
+def test_rag_lookup_observes_metrics():
+    import types, sys
+    import agent.graph as g
+    from agent.metrics import RAG_DURATION, RAG_CHUNKS
+
+    fake_rag = types.ModuleType("tools.rag_tool")
+    fake_rag.get_field_info = lambda field: [f"chunk_a for {field}", f"chunk_b for {field}"]
+    fake_rag.query_knowledge = lambda q: []
+
+    import unittest.mock as mock
+    with mock.patch.dict("sys.modules", {"tools.rag_tool": fake_rag}):
+        state = {
+            "field_errors": ["nfSetIdLists"],
+            "unknown_fields": [],
+            "alert_start_time": None,
+        }
+        before = RAG_DURATION._sum.get()
+        result = g.rag_lookup(state)
+        after = RAG_DURATION._sum.get()
+
+    assert after > before, "RAG_DURATION histogram was not observed"
+    assert result.get("rag_context") == ["chunk_a for nfSetIdLists", "chunk_b for nfSetIdLists"]

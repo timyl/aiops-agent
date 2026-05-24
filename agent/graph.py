@@ -217,6 +217,7 @@ def fetch_nrf_logs(state: AgentState) -> AgentState:
 
 def rag_lookup(state: AgentState) -> AgentState:
     from tools.rag_tool import get_field_info, query_knowledge
+    from agent.metrics import RAG_DURATION, RAG_CHUNKS
 
     field_errors   = state.get("field_errors", [])
     unknown_fields = state.get("unknown_fields", [])
@@ -233,6 +234,7 @@ def rag_lookup(state: AgentState) -> AgentState:
         log.info(f"[GRAPH] → rag_lookup  (querying knowledge base for unknown fields {unknown_fields} — context for notify message)")
 
     chunks = []
+    rag_t0 = time.time()
     for field in all_fields:
         log.info(f"[LLM]   > RAG query: field name '{field}'")
         results = get_field_info(field)
@@ -240,6 +242,7 @@ def rag_lookup(state: AgentState) -> AgentState:
         for r in results:
             log.info(f"[LLM]     · {r[:100]}...")
         chunks.extend(results)
+    RAG_DURATION.observe(time.time() - rag_t0)
 
     # Deduplicate
     seen = set()
@@ -249,6 +252,7 @@ def rag_lookup(state: AgentState) -> AgentState:
             seen.add(c)
             unique_chunks.append(c)
 
+    RAG_CHUNKS.observe(len(unique_chunks))
     return {**state, "rag_context": unique_chunks}
 
 
