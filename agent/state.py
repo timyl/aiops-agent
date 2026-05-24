@@ -35,3 +35,6 @@ class AgentState(TypedDict):
     fix_applied: bool
     fix_verified: bool
     error: Optional[str]
+
+    # Metrics: wall-clock time when fetch_logs started (used to compute alert_duration)
+    alert_start_time: Optional[float]

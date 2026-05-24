@@ -89,7 +89,9 @@ def fetch_logs(state: AgentState) -> AgentState:
         for line in error_lines[:3]:
             log.info(f"[TOOL/ES]    {line[:130]}")
 
-    return {**state, "logs": logs}
+    _existing = state.get("alert_start_time")
+    _start = _existing if _existing is not None else time.time()
+    return {**state, "logs": logs, "alert_start_time": _start}
 
 
 # ── Node: fetch_metrics ───────────────────────────────────────────────────────

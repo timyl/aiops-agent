@@ -33,3 +33,10 @@ def test_fix_verified_has_result_label():
     from prometheus_client import Counter
     assert isinstance(FIX_VERIFIED, Counter)
     assert "result" in FIX_VERIFIED._labelnames
+
+
+def test_agent_state_has_alert_start_time():
+    from agent.state import AgentState
+    import typing
+    hints = typing.get_type_hints(AgentState)
+    assert "alert_start_time" in hints, "AgentState missing alert_start_time field"
