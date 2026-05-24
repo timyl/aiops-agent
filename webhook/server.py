@@ -3,12 +3,15 @@ import logging
 import os
 from datetime import datetime
 from fastapi import FastAPI, Request
+from fastapi.responses import Response
 from kafka import KafkaProducer
 from dotenv import load_dotenv
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 load_dotenv()
 
 from agent.log_fmt import AIOpsFormatter
+import agent.metrics  # noqa: F401 — registers metric objects at import time
 
 _handler = logging.StreamHandler()
 _handler.setFormatter(AIOpsFormatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -48,3 +51,9 @@ async def receive_alarm(request: Request):
 @app.get("/health")
 async def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint — scraped by Prometheus every 15s."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

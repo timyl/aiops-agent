@@ -115,3 +115,19 @@ def test_notify_increments_alerts_processed_escalated():
 
     after = ALERTS_PROCESSED.labels(outcome="escalated")._value.get()
     assert after == before + 1, "ALERTS_PROCESSED[escalated] should have incremented"
+
+
+def test_metrics_endpoint_returns_prometheus_text():
+    """GET /metrics must return 200 with text/plain content and Prometheus exposition format."""
+    from fastapi.testclient import TestClient
+
+    # Patch KafkaProducer so importing webhook.server doesn't try to connect to Kafka
+    import unittest.mock as mock
+    with mock.patch("kafka.KafkaProducer"):
+        from webhook.server import app
+
+    client = TestClient(app)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers["content-type"]
+    assert b"aiops_" in resp.content or b"python_gc" in resp.content
