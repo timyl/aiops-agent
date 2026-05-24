@@ -28,6 +28,9 @@ spec:
                 name: aiops-config
             - secretRef:
                 name: aiops-secret
+          ports:
+            - containerPort: 9100
+              name: metrics
           volumeMounts:
             - name: incident-data
               mountPath: /data

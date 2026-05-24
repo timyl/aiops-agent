@@ -125,6 +125,9 @@ def handle_alert(alert: dict, consumer: KafkaConsumer, partition: int, offset: i
 
 
 def run_worker() -> None:
+    from prometheus_client import start_http_server
+    start_http_server(9100)
+    log.info("[WORKER] Prometheus metrics server started on port 9100")
     log.info(f"[WORKER] Connecting to Kafka {KAFKA_BOOTSTRAP}, topic={KAFKA_TOPIC}, group={KAFKA_GROUP}")
     def _deserialize(b: bytes):
         try:
