@@ -35,8 +35,7 @@ spec:
             - name: incident-data
               mountPath: /data
             - name: agent-config
-              mountPath: /app/config/agent_config.yaml
-              subPath: agent_config.yaml
+              mountPath: /app/config
           resources:
             requests:
               cpu: "200m"
