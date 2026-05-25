@@ -23,12 +23,8 @@ def _load_config() -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
 
-_cfg = _load_config()
-
-ALLOWED_PLMNS       = _cfg["plmn"]["allowed"]
-_ALLOWED_PLMNS_STR  = os.getenv("ALLOWED_PLMNS", ",".join(f"{p['mcc']}/{p['mnc']}" for p in ALLOWED_PLMNS))
-_NRF_RETRY_OK       = int(os.getenv("NRF_RETRY_OK_THRESHOLD",   "3"))
-_NRF_RETRY_FAIL     = int(os.getenv("NRF_RETRY_FAIL_THRESHOLD", "10"))
+_NRF_RETRY_OK   = int(os.getenv("NRF_RETRY_OK_THRESHOLD",   "3"))
+_NRF_RETRY_FAIL = int(os.getenv("NRF_RETRY_FAIL_THRESHOLD", "10"))
 
 ES_URL   = os.getenv("ES_URL",         "http://172.16.100.91:30200")
 PROM_URL = os.getenv("PROMETHEUS_URL", "http://172.16.100.91:30504")
@@ -37,9 +33,6 @@ PCF_PATH = "/PCF/nf-common-component/v1/nrf-client-nfmanagement/nfProfileList"
 
 # Regex to extract dropped field names from NRF WARN logs
 _DROPPED_RE = re.compile(r"dropped/ignored\s+\[([^\]]+)\]", re.IGNORECASE)
-
-_FIXABLE_TYPOS = set(_cfg["nrf"]["fixable_typos"])
-_VENDOR_FIELDS = set(_cfg["nrf"]["vendor_fields"])
 
 
 def _build_fix_action(name: str, args: dict) -> str:
@@ -100,6 +93,9 @@ def fetch_metrics(state: AgentState) -> AgentState:
     from tools.prometheus_tool import get_nrf_registration_rate, get_nrf_response_errors, get_pcf_local_status
     from tools.pcf_tool import get_pcf_profile
 
+    cfg = _load_config()
+    ALLOWED_PLMNS = cfg["plmn"]["allowed"]
+
     ns = state["namespace"]
     log.info(f"[GRAPH] → fetch_metrics")
 
@@ -153,6 +149,10 @@ def fetch_metrics(state: AgentState) -> AgentState:
 
 def fetch_nrf_logs(state: AgentState) -> AgentState:
     from tools.es_tool import fetch_nrf_logs as es_nrf_fetch
+
+    cfg = _load_config()
+    _FIXABLE_TYPOS = set(cfg["nrf"]["fixable_typos"])
+    _VENDOR_FIELDS = set(cfg["nrf"]["vendor_fields"])
 
     index = f"k8s-{datetime.now(timezone.utc).strftime('%Y.%m.%d')}"
     since = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%H:%M:%SZ")
@@ -267,6 +267,9 @@ def analyze(state: AgentState) -> AgentState:
 
 
 def _analyze_with_rules(state: AgentState) -> AgentState:
+    cfg = _load_config()
+    ALLOWED_PLMNS = cfg["plmn"]["allowed"]
+
     plmn         = state["pcf_plmn"]
     rate         = state["nrf_rate"]
     field_errors = state.get("field_errors", [])
@@ -303,6 +306,12 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
     from langchain_core.messages import HumanMessage, SystemMessage
     from agent.prompts import SYSTEM_PROMPT, ANALYSIS_PROMPT
     from tools.tool_registry import TOOLS
+
+    cfg = _load_config()
+    _ALLOWED_PLMNS_STR = os.getenv(
+        "ALLOWED_PLMNS",
+        ",".join(f"{p['mcc']}/{p['mnc']}" for p in cfg["plmn"]["allowed"]),
+    )
 
     log.info(f"[GRAPH] → analyze  (mode=llm)")
 
@@ -436,6 +445,10 @@ def _analyze_with_llm(state: AgentState) -> AgentState:
 
 def execute_tool(state: AgentState) -> AgentState:
     """通用 PCF 工具执行节点，替代原 auto_fix + fix_field。"""
+    cfg = _load_config()
+    ALLOWED_PLMNS  = cfg["plmn"]["allowed"]
+    _FIXABLE_TYPOS = set(cfg["nrf"]["fixable_typos"])
+
     name = state.get("tool_call_name") or ""
     args = state.get("tool_call_args") or {}
 

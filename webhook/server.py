@@ -11,7 +11,6 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 load_dotenv()
 
 from agent.log_fmt import AIOpsFormatter
-import agent.metrics  # noqa: F401 — registers metric objects at import time
 
 _handler = logging.StreamHandler()
 _handler.setFormatter(AIOpsFormatter("%(asctime)s [%(levelname)s] %(message)s"))
