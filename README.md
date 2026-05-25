@@ -79,6 +79,28 @@ AlertManager ──► Kafka (aiops-alerts topic)
 
 ---
 
+## Observability
+
+Real-time metrics from a load-test run (29 alerts, 5 concurrent scenarios).
+
+![Grafana Dashboard — AIOps Agent v1.3](https://github.com/user-attachments/assets/91db2df6-0b99-416c-9cbc-6a40ab3b1f30)
+
+**Key results:** 69% auto-fixed · 17% escalated to human · 100% fix verification rate  
+**Latency:** end-to-end p50 ~30 s · LLM call p50 ~5.4 s (qwen-max)
+
+| Metric | Description |
+|--------|-------------|
+| `aiops_alerts_processed_total` | Alert outcomes by type: `auto_fixed`, `escalated`, `no_action` |
+| `aiops_alert_duration_seconds` | End-to-end processing latency per alert |
+| `aiops_fix_verified_total` | PCF config fix verification pass/fail rate |
+| `aiops_safety_gate_rejected_total` | Blocked LLM calls outside whitelist |
+| `aiops_llm_duration_seconds` / `aiops_llm_tokens_total` | LLM latency and token usage |
+| `aiops_rag_duration_seconds` / `aiops_rag_chunks_returned` | RAG knowledge base query performance |
+
+Metrics scraped from two endpoints: webhook `/metrics` on port 8000 and worker `/metrics` on port 9100, via Prometheus `ServiceMonitor`.
+
+---
+
 ## Fault Scenarios
 
 The agent covers the full PCF alert ruleset. Actions fall into three tiers:
