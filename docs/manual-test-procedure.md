@@ -422,6 +422,61 @@ wait
 
 ---
 
+## S7：LLM Token 预算告警
+
+**验证目标：** 当 1 小时内 token 消耗超过阈值，Prometheus 触发 `LLMTokenBudgetExceeded`，AlertManager 通过 Slack 发出告警
+
+**前置条件：**
+- `k8s/aiops/llm-budget-alert.yaml` 已 apply（PrometheusRule + AlertmanagerConfig）
+- `aiops-secret` 中 `NOTIFY_WEBHOOK_URL` 已配置
+
+**步骤：**
+
+1. 确认 K8s 资源已创建：
+   ```bash
+   ssh dscl1 "kubectl get prometheusrule -n monitoring aiops-llm-budget"
+   ssh dscl1 "kubectl get alertmanagerconfig -n aiops aiops-llm-budget"
+   ```
+
+2. **临时降低阈值**（默认 10,000 tokens，改为 0 方便触发）：
+   ```bash
+   ssh dscl1 "kubectl edit prometheusrule aiops-llm-budget -n monitoring"
+   # 将 > 10000 改为 > 0，保存退出（:wq）
+   ```
+
+3. 触发任意告警产生 LLM token 消耗（S2 最快，约 21s）：
+   ```bash
+   NO_PROXY="172.16.100.0/24" python3 scripts/load_test.py --scenario 2
+   ```
+
+4. 在 Prometheus UI 确认告警状态：
+   ```
+   http://172.16.100.91:30504/alerts
+   ```
+   期望看到 `LLMTokenBudgetExceeded` 先变为 **Pending**（等 2 分钟 for 期），再变为 **Firing**
+
+5. Slack 收到消息，内容包含 token 用量说明
+
+6. **还原阈值**：
+   ```bash
+   ssh dscl1 "kubectl edit prometheusrule aiops-llm-budget -n monitoring"
+   # 将 > 0 改回 > 10000，保存退出
+   ```
+
+**PromQL 手动核查当前 token 用量：**
+```bash
+curl -sg "http://172.16.100.91:30504/api/v1/query" \
+  --data-urlencode 'query=sum(increase(aiops_llm_tokens_total[1h]))' \
+  | python3 -c "import json,sys; r=json.load(sys.stdin); print('tokens/1h:', r['data']['result'][0]['value'][1])"
+```
+
+**说明：**
+- 阈值可随时通过 `kubectl edit` 调整，无需 rebuild 镜像
+- AlertmanagerConfig `repeatInterval: 4h` 防止重复告警刷屏
+- 正式使用时建议按每日 DashScope 配额换算阈值（当前免费 tier：约 100 万 tokens/day）
+
+---
+
 ## Grafana 完整核查清单
 
 测试完成后在 Grafana（`http://172.16.100.91:31225`）逐项确认：
