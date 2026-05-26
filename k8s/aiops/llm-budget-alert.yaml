@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-llm-budget
+  namespace: monitoring
+spec:
+  groups:
+  - name: aiops_llm_budget.rules
+    rules:
+    - alert: LLMTokenBudgetExceeded
+      # Fires when total token consumption (prompt + completion) in the last hour
+      # exceeds the budget. Adjust the threshold to match your DashScope quota.
+      expr: sum(increase(aiops_llm_tokens_total[1h])) > 10000
+      for: 2m
+      labels:
+        severity: warning
+        namespace: aiops
+      annotations:
+        summary: "AIOps LLM token budget exceeded"
+        description: >-
+          LLM token usage in the last hour reached {{ $value | printf "%.0f" }} tokens,
+          exceeding the 10,000-token/hour budget. Review alert volume or raise the
+          threshold in the aiops-llm-budget PrometheusRule.
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: aiops-llm-budget
+  namespace: aiops
+  labels:
+    alertmanager: main
+spec:
+  receivers:
+    - name: slack-llm-budget
+      slackConfigs:
+        - apiURL:
+            name: aiops-secret
+            key: NOTIFY_WEBHOOK_URL
+          title: ":money_with_wings: AIOps LLM Budget Alert"
+          text: >-
+            Token usage last 1h: *{{ "{{" }} (index .Alerts 0).Annotations.description {{ "}}" }}*
+          sendResolved: false
+  route:
+    receiver: slack-llm-budget
+    matchers:
+      - name: alertname
+        matchType: "="
+        value: LLMTokenBudgetExceeded
+    groupWait: 1m
+    repeatInterval: 4h
