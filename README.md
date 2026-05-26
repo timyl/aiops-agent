@@ -1,5 +1,7 @@
 # AIOps Agent — 5G NF Intelligent Operations
 
+[![CI](https://github.com/timyl/aiops-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/timyl/aiops-agent/actions/workflows/ci.yml)
+
 > An autonomous AIOps agent that monitors 5G core network NF registration failures, localizes root causes, applies configuration fixes, and verifies recovery — end-to-end in minutes.
 
 **Stack:** LangGraph · qwen-max (function calling) / OCI Generative AI · Alibaba Bailian RAG / OCI OpenSearch RAG · Kafka · Redis · Kubernetes · Prometheus · Elasticsearch
