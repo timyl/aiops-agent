@@ -367,37 +367,126 @@ Alert fires → agent fetches evidence → LLM calls `update_pcf_plmn` via funct
 NRF silently drops a misspelled field; PCF thinks registration succeeded (HTTP 200) but NF profile is incomplete. Agent detects via NRF WARN logs + RAG lookup, fixes via PCF REST API, verifies by checking profile keys.
 
 ```text
-[ALERT]  NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
-[AGENT]  Starting LangGraph agent for occnp2...
-
-[GRAPH]  → fetch_metrics   nrf_retry_rate=0.0  (no hard rejection loop)
-[GRAPH]  → fetch_nrf_logs  ⚠ fixable typo detected: 'nfSetIdLists'
-[GRAPH]               WARN ocnrf [requesterNfType=PCF]: Allow only VendorSpecific
-[GRAPH]               attributes — field 'nfSetIdLists' is not a valid 3GPP attribute
-[GRAPH]  → rag_lookup  querying knowledge base for 'nfSetIdLists'
-[RAG]    top chunk: "Per 3GPP TS 29.510 §6.2.2, correct field is 'nfSetIdList'
-                    (no trailing 's'). NRF silently drops unrecognized attributes."
-[GRAPH]  → analyze  (mode=llm)
-[LLM]    < 200 OK  duration=4.2s
-[LLM]    ── Diagnosis ───────────────────────────────────────
-[LLM]    root_cause → Field 'nfSetIdLists' is a typo; NRF silently drops it.
-[LLM]    confidence → high
-[LLM]    tool_call  → fix_profile_field({'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'})
-[LLM]    ────────────────────────────────────────────────────
-
-[GRAPH]  → decide  route=execute_tool  tool=fix_profile_field  confidence=high
-[GRAPH]  → execute_tool  tool=fix_profile_field
-[SAFETY] Field 'nfSetIdLists' ✓ confirmed in fixable_typos whitelist
-[EXECUTE] > PATCH /nrf-client-nfmanagement/nfProfileList
-[EXECUTE] > rename 'nfSetIdLists' → 'nfSetIdList'
-[PCF]    < 200 OK  duration=0.051s
-
-[VERIFY] field key 'nfSetIdList' present ✓  |  'nfSetIdLists' absent ✓
-
-[AGENT]  ===== Run Complete =====
-[AGENT]  Root cause  : PCF field 'nfSetIdLists' silently dropped by NRF.
-[AGENT]  Fix applied : True  |  Fix verified: True
-[AUDIT]  Incident saved → /data/incidents.jsonl
+ [INFO] [WORKER] Consumed offset=23 partition=0
+ [INFO] [ALERT] NfRegistrationFailure | ns=occnp2 | NfType=PCF | status=firing
+ [INFO] [AGENT] Starting LangGraph agent for occnp2...
+ [INFO] [GRAPH] → fetch_logs
+ [INFO] [TOOL/ES]  > GET http://172.16.100.91:30200/k8s-2026.05.27/_search
+ [INFO] [TOOL/ES]  > filter: namespace=occnp2  level IN [ERROR,WARN]  @timestamp >= now-5m  (since 05:44:48Z)
+ [INFO] [TOOL/ES]  < 200 OK  duration=0.782s  returned=46 lines  (ERROR=0, WARN=46)
+ [INFO] [GRAPH] → fetch_metrics
+ [INFO] [TOOL/PM]  > GET http://172.16.100.91:30504/api/v1/query
+ [INFO] [TOOL/PM]  > query: increase(occnp_nrfclient_nw_conn_out_request_total{MessageType="AutonomousNfRegistration",namespace="occnp2"}[2m])
+ [INFO] [TOOL/PM]  < 200 OK  duration=0.010s
+ [INFO] [TOOL/PM]    nrf_retry_rate=1.3/2min  (threshold=3, ✓ normal)
+ [INFO] [TOOL/PM]    pcf_local_status=PCF_LOCAL_REGISTERED
+ [INFO] [TOOL/PCF] > GET http://172.16.100.231:8000/PCF/nf-common-component/v1/nrf-client-nfmanagement/nfProfileList
+ [INFO] [TOOL/PCF] < 200 OK  duration=0.005s
+ [INFO] [TOOL/PCF]   nfStatus=REGISTERED  plmnList=[{'mcc': '510', 'mnc': '011'}]
+ [INFO] [TOOL/PCF]   plmn 510/011 → ✓ in NRF allowed list
+ [INFO] [GRAPH] → fetch_nrf_logs
+ [INFO] [TOOL/ES]  > GET http://172.16.100.91:30200/k8s-2026.05.27/_search
+ [INFO] [TOOL/ES]  > filter: namespace=ocnrf1  level IN [ERROR,WARN]  @timestamp >= now-5m  (since 05:44:49Z)
+ [INFO] [TOOL/ES]  < 200 OK  duration=0.006s  returned=1 lines  (WARN=1)
+ [INFO] [TOOL/ES]  ⚠ PCF field typo detected (auto-fixable): 'nfSetIdLists'
+ [INFO] [TOOL/ES]    [2026-05-27T05:49:25] WARN ocnrf-nfregistration-b5bb7fcdd-gbmpg [requesterNfType=PCF]: Allow only VendorSpecific attributes. Value of enableF5 is true and acceptAdditionalAttributes is false. The foll
+ [INFO] [GRAPH] → rag_lookup  (querying knowledge base for ['nfSetIdLists'])
+ [INFO] [LLM]   > RAG query: field name 'nfSetIdLists'
+ [INFO] [LLM]   < RAG returned 5 chunk(s)
+ [INFO] [LLM]     · priority: 3GPP TS 29.510 correct field name. Integer 0-65535. Lower value = higher priority for NF s...
+ [INFO] [LLM]     · Oracle NRF silent drop: when NRF receives an NF Profile PUT/PATCH request with unknown or non-standa...
+ [INFO] [LLM]     · nfSetIdList: 3GPP TS 29.510 section 6.1.6.2.2 — correct field name. List of NF Set identifiers the N...
+ [INFO] [LLM]     · scpInfo: vendor-specific field, not in 3GPP TS 29.510 core NF profile schema. Some vendor implementa...
+ [INFO] [LLM]     · olcHSupportInd: vendor-specific indicator field. Not a standard 3GPP TS 29.510 NF Profile field. Ora...
+ [INFO] [GRAPH] → analyze  (mode=llm)
+ [INFO] [LLM]   > POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions  model=qwen-max  temperature=0  tools=['update_pcf_plmn', 'fix_profile_field', 'notify_only', 'no_action']
+ [INFO] [LLM]   ┌── SYSTEM PROMPT ────────────────────────────────────────────
+ [INFO] [LLM]   │  You are a 5G core network SRE agent specializing in NF registration diagnostics.
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  Your job: read the evidence provided and output a structured diagnosis, then call the appropriate tool.
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  Output:
+ [INFO] [LLM]   │  - root_cause: one concise sentence describing the confirmed fault
+ [INFO] [LLM]   │  - confidence:
+ [INFO] [LLM]   │      "high"   — evidence is unambiguous, single clear cause
+ [INFO] [LLM]   │      "medium" — most likely cause but minor uncertainty remains
+ [INFO] [LLM]   │      "low"    — signals conflict or insufficient evidence to determine root cause
+ [INFO] [LLM]   │  - Call exactly one tool to express your decision:
+ [INFO] [LLM]   │      update_pcf_plmn(mcc, mnc)             — PCF plmnList contains a PLMN not accepted by NRF; correct value is mcc/mnc
+ [INFO] [LLM]   │      fix_profile_field(wrong_name, correct_name) — field name typo in PCF profile dropped silently by NRF
+ [INFO] [LLM]   │      notify_only(reason)                   — fault detected but outside auto-fix scope; human intervention required
+ [INFO] [LLM]   │      no_action(reason)                     — system is healthy; alert is stale or self-resolved
+ [INFO] [LLM]   ├── USER MESSAGE (ANALYSIS_PROMPT filled) ────────────────
+ [INFO] [LLM]   │  Analyze this NF registration incident. Think step by step.
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  Alert: NfRegistrationFailure | namespace: occnp2
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  === EVIDENCE ===
+ [INFO] [LLM]   │  NRF retry rate (2min): 1.3  [healthy < 3, active failure loop > 10]
+ [INFO] [LLM]   │  PCF local status: PCF_LOCAL_REGISTERED
+ [INFO] [LLM]   │  PCF plmnList: [{'mcc': '510', 'mnc': '011'}]
+ [INFO] [LLM]   │  Allowed PLMNs: 510/011,208/93,001/01,001/001,505/02
+ [INFO] [LLM]   │  Silent-drop field errors (auto-detected from NRF logs): ['nfSetIdLists']
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  === PCF LOGS (ERROR/WARN) ===
+ [INFO] [LLM]   │  [2026-05-27T05:49:25] WARN occnp-occnp-nrf-client-nfmanagement-6c966f7847-jh94h: Performance data not available for npcf
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  === NRF LOGS (WARN) ===
+ [INFO] [LLM]   │  [2026-05-27T05:49:25] WARN ocnrf-nfregistration-b5bb7fcdd-gbmpg [requesterNfType=PCF]: Allow only VendorSpecific attribu
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  === KNOWLEDGE BASE (retrieved for this incident) ===
+ [INFO] [LLM]   │  priority: 3GPP TS 29.510 correct field name. Integer 0-65535. Lower value = higher priority for NF selection.nfSetIdLists: INVALID — not a 3GPP TS 29.510 field. Common typo: extra 's' appended to nfSetIdList. Oracle NRF behavior: returns HTTP 200 but silently drops this field. NRF WARN log: 'The following attributes have been dropped/ignored [nfSetIdLists]'. Business impact: downstream NFs cannot discover this PCF by NF Set membership. Fix: rename field to nfSetIdList (remove trailing 's').
+ [INFO] [LLM]   │  ---
+ [INFO] [LLM]   │  Oracle NRF silent drop: when NRF receives an NF Profile PUT/PATCH request with unknown or non-standard fields, it returns HTTP 200 OK but omits those fields from storage. A WARN log is emitted: 'The following attributes have been dropped/ignored [fieldName]'. The registration appears successful from the PCF perspective (nrf_rate stays normal), but the profile stored in NRF is incomplete. Detection: query NRF WARN logs, not Prometheus metrics.
+ [INFO] [LLM]   │  ---
+ [INFO] [LLM]   │  nfSetIdList: 3GPP TS 29.510 section 6.1.6.2.2 — correct field name. List of NF Set identifiers the NF belongs to. Type: array of strings. Example: ['pcfSet-A', 'pcfSet-B']. NRF validates and stores this field.nfServiceList: 3GPP TS 29.510 correct field name. Map of NF service instances exposed by this NF. Key: service name. NRF indexes this for service discovery.plmnList: 3GPP TS 29.510 correct field name. List of PLMN IDs the NF serves. Each entry: {mcc, mnc}. NRF validates mcc/mnc against its allowed list.
+ [INFO] [LLM]   │  ---
+ [INFO] [LLM]   │  scpInfo: vendor-specific field, not in 3GPP TS 29.510 core NF profile schema. Some vendor implementations include this; Oracle NRF may drop it with WARN log. Not safe to auto-fix — could be intentional vendor extension.servingScope: vendor-specific or operator-defined field. Not in 3GPP TS 29.510 standard NF profile. Oracle NRF may silently drop. Requires operator review before removal.lcHSupportInd: vendor-specific indicator field. Not a standard 3GPP TS 29.510 NF Profile field. Oracle NRF silently drops. Likely safe to remove if not used by any consumer NF.
+ [INFO] [LLM]   │  ---
+ [INFO] [LLM]   │  olcHSupportInd: vendor-specific indicator field. Not a standard 3GPP TS 29.510 NF Profile field. Oracle NRF silently drops. Likely safe to remove if not used by any consumer NF.
+ [INFO] [LLM]   │  
+ [INFO] [LLM]   │  Analyze the evidence, then call the appropriate tool with correct parameters.
+ [INFO] [LLM]   │  Also include in your text response:
+ [INFO] [LLM]   │  {
+ [INFO] [LLM]   │    "observations": [
+ [INFO] [LLM]   │      "<key fact 1 from the evidence>",
+ [INFO] [LLM]   │      "<key fact 2>",
+ [INFO] [LLM]   │      "<key fact 3 if any>"
+ [INFO] [LLM]   │    ],
+ [INFO] [LLM]   │    "root_cause": "<one concise sentence>",
+ [INFO] [LLM]   │    "confidence": "high" | "medium" | "low"
+ [INFO] [LLM]   │  }
+ [INFO] [LLM]   └────────────────────────────────────────────────────────────
+ [INFO] [LLM]   tokens: prompt=1770  completion=187
+ [INFO] [LLM]   < 200 OK  duration=23.0s
+ [INFO] [LLM]   ── Tool Call ───────────────────────────────────────
+ [INFO] [LLM]   tool → fix_profile_field  args={'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'}
+ [INFO] [LLM]   ── Observations ────────────────────────────────────
+ [INFO] [LLM]   [1] NRF retry rate is within a healthy range (1.3, which is < 3).
+ [INFO] [LLM]   [2] The PCF's plmnList contains a PLMN that is in the allowed PLMNs list (510/011).
+ [INFO] [LLM]   [3] There is a silent-drop field error for 'nfSetIdLists' as detected from NRF logs, which is a known typo of the correct field name 'nfSetIdList'.
+ [INFO] [LLM]   ── Diagnosis ───────────────────────────────────────
+ [INFO] [LLM]   root_cause → The NF registration failure is due to a field name typo in the PCF profile ('nfSetIdLists' instead of 'nfSetIdList') that is silently dropped by the NRF.
+ [INFO] [LLM]   confidence → high
+ [INFO] [LLM]   tool_call  → fix_profile_field({'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'})
+ [INFO] [LLM]   ────────────────────────────────────────────────────
+ [INFO] [GRAPH] → decide  route=execute_tool  tool=fix_profile_field  confidence=high
+ [INFO] [GRAPH] → execute_tool  tool=fix_profile_field  args={'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'}
+ [INFO] [SAFETY] Field 'nfSetIdLists' ✓ confirmed in fixable_typos whitelist
+ [INFO] [FIX]   > calling fix_profile_field(**{'wrong_name': 'nfSetIdLists', 'correct_name': 'nfSetIdList'})
+ [INFO] [EXECUTE] fix_profile_field completed  duration=0.055s
+ [INFO] [GRAPH] → verify_fix  (field fix — verifying PCF profile keys, sleeping 5s...)
+ [INFO] [TOOL/PCF] < profile keys: ['load', 'nfType', 'pcfInfo', 'capacity', 'locality', 'nfStatus', 'plmnList', 'nfServices', 'nfSetIdList', 'nfInstanceId', 'ipv4Addresses', 'nfServiceList', 'heartBeatTimer']
+ [INFO] [VERIFY] profile has 'nfSetIdList', 'nfSetIdLists' absent  ✓ Field fix confirmed
+ [INFO] [AGENT] ===== Run Complete =====
+ [INFO] [AGENT] Root cause  : The NF registration failure is due to a field name typo in the PCF profile ('nfSetIdLists' instead of 'nfSetIdList') that is silently dropped by the NRF.
+ [INFO] [AGENT] Fix action  : fix_field:nfSetIdLists:nfSetIdList
+ [INFO] [AGENT] Confidence  : high
+ [INFO] [AGENT] Fix applied : True
+ [INFO] [AGENT] Fix verified: True
+ [INFO] [AGENT] ==========================
+ [INFO] [AUDIT] Incident saved → /data/incidents.jsonl
+ [INFO] [KAFKA] Committed offset=24 partition=0
 ```
 
 ---
